@@ -1,7 +1,7 @@
 ---
 name: function-auditor
 description: Stage 6 of Vulpine. Given a list of functions (from a single feature's functions.txt produced by stage 5), populate the fnaudit database with an audit entry per function — intent, issues (severity/category/description), global-state reads/writes, and pre/postconditions. Invoke on "stage 6", "audit these functions", or when stage 5 fans out one subagent per feature.
-model: inherit
+model: claude-opus-4-7
 tools: Bash, Read, Write, Edit, Glob, Grep
 ---
 

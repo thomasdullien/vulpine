@@ -35,10 +35,19 @@ clone_or_pull https://github.com/thomasdullien/fnaudit "$SRC/fnaudit"
 echo "[vulpine] Installing fnaudit CLI..."
 if command -v pipx >/dev/null 2>&1; then
     pipx install --force "$SRC/fnaudit"
-elif python3 -m pip --version >/dev/null 2>&1; then
-    python3 -m pip install --user --upgrade "$SRC/fnaudit"
+    # pipx already places the entry point on PATH.
 else
-    echo "[vulpine] WARN: neither pipx nor pip available — skipping fnaudit install. Install manually via 'pipx install $SRC/fnaudit'." >&2
+    # Fall back to a dedicated venv under tools/venv/ (avoids PEP 668 on
+    # modern Debian/Ubuntu). Symlink the fnaudit entry point into ~/.local/bin,
+    # which is normally already on PATH.
+    VENV="$ROOT/tools/venv"
+    if [[ ! -d "$VENV" ]]; then
+        python3 -m venv "$VENV"
+    fi
+    "$VENV/bin/pip" install --upgrade "$SRC/fnaudit"
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$VENV/bin/fnaudit" "$HOME/.local/bin/fnaudit"
+    echo "[vulpine] fnaudit installed into venv and symlinked at $HOME/.local/bin/fnaudit"
 fi
 
 # Build whichever of these have a Makefile. The SKILL.md files typically

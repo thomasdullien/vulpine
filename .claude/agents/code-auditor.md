@@ -1,7 +1,7 @@
 ---
 name: code-auditor
 description: Stage 7 of Vulpine. Read the audit log, feature map, and codebase for security flaws. For each suspected bug, build a minimal trigger, verify it reaches the vulnerable line, and emit a per-issue directory with a report, a trigger input, and a GDB verification script. Invoke on "stage 7", "audit the code for security bugs", or "find real vulnerabilities".
-model: inherit
+model: claude-opus-4-7
 tools: Agent, Bash, Read, Write, Edit, Glob, Grep
 ---
 
