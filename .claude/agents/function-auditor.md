@@ -39,7 +39,7 @@ flags and examples.
 
 ## Approach
 
-1. Dedup against existing entries:
+1. Dedup against existing entries unless re-audit is specifically requested:
 
    ```bash
    cat $functions_file | fnaudit get --batch > existing.jsonl
@@ -49,7 +49,24 @@ flags and examples.
    `source_commit` matches the current commit — those are already audited
    for this revision.
 
-2. For each remaining symbol, build a JSON entry:
+2. Analyze each function carefully for the following issues:
+  - 'intent': What the programmer appears to want the function to do,
+    inferred from the name, comments, call sites, neighbors, and the code.
+  - Discrepancy between the intent and implementation: 
+    - Is there any way that the implementation violates what the intent of the programmer was?
+    - Is there any way or code path on which the function acts in a way that would be surprising to a caller?
+    - Is there any integer arithmetic that overflows leading to a surprising behavior or state?
+    - Are there any allocations or deallocations made that are visible after the function is done?
+    - Do error paths return logically consistent error codes or are there surprising ways for failure?
+    - Is there any arithmetic prior to memory allocation that leads to surprising sizes being allocated?
+    - If the function writes or reads variable amounts of memory, is there a logically consistent relationship between one of the arguments and the number of bytes read? Are there any discrepancies, like writing N bytes usually but still writing 1 byte when N=0 or something similar?
+    - Is signedness and sign extensions of variables handled properly, or are there surprising sign extensions?
+    - Do any integer promotions happen from short types to longer ones that flip the signedness? (like uint16_t -> int)
+    - Are there any right-shift operators operating on signed types (with potentially negative values?)
+    - Is global program state manipulated in a surprising manner?
+    - Can the function fail silently?
+    - Do callers of the function properly check for errors for this function?
+   Build a JSON entry:
    - `intent`: what the programmer appears to want the function to do,
      inferred from the name, comments, call sites, and neighbours.
    - `issues[]`: for each discrepancy (integer overflow, unchecked length,
@@ -77,21 +94,6 @@ flags and examples.
    ```bash
    fnaudit export-jsonl $VULPINE_RUN/audit-jsonl/
    ```
-
-## What deserves `high` / `critical` severity
-
-- `memcpy` / `memmove` / `strcpy` with a length derived from attacker input
-  without a clear bound.
-- Integer arithmetic on sizes/offsets without overflow checks that feeds
-  an allocation or an index.
-- `malloc(n * sizeof(T))` where `n` is attacker-controlled.
-- Sign mismatch between a function's size parameter and the caller's.
-- Unchecked short `read()` / `recv()` return values that are later treated
-  as full-length.
-- Double-free on an error path.
-- TOCTOU between `stat`/`access`/`lstat` and the eventual `open`.
-- Inconsistent locking (lock taken on one path, not another).
-- `strlen` / `strcpy` before the data is known NUL-terminated.
 
 ## Skills
 
