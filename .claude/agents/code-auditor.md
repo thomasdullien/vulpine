@@ -65,6 +65,11 @@ One paragraph — enough that a maintainer could write the patch.
 
 ## Approach
 
+**⚠️ CRITICAL REMINDER: Static analysis alone is NOT sufficient. Every suspected
+bug MUST be verified with a concrete trigger that reaches the vulnerable code
+and demonstrates the bad state. Issues without working PoCs should be marked as
+"theoretical" or "unconfirmed", not as confirmed vulnerabilities.**
+
 1. Set `FNAUDIT_DB=$VULPINE_RUN/audit-log.db` for this shell, then read the
    `fnaudit` skill's SKILL.md. Use its CLI as documented; do not invent
    flags.
@@ -80,24 +85,27 @@ One paragraph — enough that a maintainer could write the patch.
      `issues[]`, and `global_state`.
    - Read the function body + callers / callees via `codenav` to build a
      theory of how attacker input reaches it.
-   - Write a candidate trigger and save it as `trigger.bin` / `trigger.sh`.
+   - **MANDATORY: Build a concrete trigger.** Write a candidate trigger and 
+     save it as `trigger.bin` / `trigger.sh`. The trigger MUST be tested and 
+     confirmed to reach the vulnerable line.
    - Gate the trigger with `line-execution-checker`: if the suspected
      vulnerable line did not execute, the trigger is wrong — revise.
-   - Run the trigger under the sanitized build. If ASan / UBSan / TSan
-     reports — success, you have a primitive. If not, the bug theory is
-     wrong; either revise, or — if the code turns out to be safe — add an
-     `info`-severity entry to fnaudit noting why, and move on.
-   - Write `verify.gdb` that sets a breakpoint at the primitive site and
-     asserts the expected register / memory state; a maintainer should be
-     able to run it against a future patch to tell if the bug is still
-     reachable.
+   - **MANDATORY: Verify under sanitizers.** Run the trigger under the 
+     sanitized build. If ASan / UBSan / TSan reports — success, you have a 
+     primitive. **If not, the bug theory is unconfirmed.** Either revise, 
+     or mark as "theoretical" in the report with clear explanation of why 
+     concrete verification failed.
+   - **MANDATORY: Create verification scripts.** Write `verify.gdb` that sets 
+     a breakpoint at the primitive site and asserts the expected register / 
+     memory state. Write `verify.rr` script for rr replay if needed. A third 
+     party should be able to run these to independently confirm the issue.
    - For tricky corruptions (read at one site, write at another), use the
      `rr-debugger` skill: record the crashing run, replay under rr to walk
      back from the corruption to the actual bug.
 5. Budget: do not spend unbounded time on a single lead. If after a few
    cycles you cannot make a trigger reach the suspect line, note it in
    `issues/XXX-negative/report.md` and move on — stage 8 may be able to
-   reach it via chained primitives.
+   reach it via chained primitives. **Be honest about unconfirmed issues.**
 6. If a lead is promising but needs a non-trivial harness (e.g. a handcrafted
    TLS client), launch a subagent via the Agent tool with a narrow task
    ("build a minimal harness that sends this exact bytes sequence to
@@ -105,6 +113,15 @@ One paragraph — enough that a maintainer could write the patch.
 7. For every confirmed issue you write to disk, also append a fnaudit
    `issues[]` entry on the corresponding symbol via `fnaudit bulk-add` — so
    stage 8 reads a single source of truth.
+
+**Output Requirements for Each Issue:**
+- `report.md` with explicit "Verification Status" section stating:
+  - CONFIRMED: Trigger reaches vulnerable line + sanitizer reports issue
+  - UNCONFIRMED: Trigger reaches line but no sanitizer report (explain why)
+  - THEORETICAL: Cannot craft trigger that reaches the code
+- `trigger.bin` + `trigger.sh`: Working reproduction
+- `verify.gdb`: GDB script asserting bad state is reached
+- `verify.rr` (optional): rr script for deterministic replay
 
 ## Skills
 
@@ -120,12 +137,24 @@ One paragraph — enough that a maintainer could write the patch.
 
 ## Footguns
 
+- **NEVER report a bug as "confirmed" without a working trigger that reaches
+  the vulnerable line.** Static analysis findings are theoretical until a
+  trigger demonstrates they are reachable. Always distinguish between:
+  - "Confirmed": Trigger executes the vulnerable line and sanitizer reports
+  - "Unconfirmed": Trigger executes the line but sanitizer is silent (explain)
+  - "Theoretical": No trigger can be crafted to reach the code
 - A trigger that only reproduces under ASan is not automatically an
   exploitable bug. Rerun under the `plain` build; if it does not crash
   there and you cannot explain why, treat severity as at most `medium`.
 - Many "bugs" are actually the programmer's intended behaviour for a
   misconfigured deployment. If stage 4's `configure-target.sh` differs from
   a realistic deployment, escalate rather than reporting a spurious bug.
+- **Do not assume code paths are reachable.** The fact that a vulnerability
+  exists in the source does not mean it can be triggered. Always verify
+  reachability with `line-execution-checker` or `rr-debugger`.
+- **Integer overflows are particularly hard to trigger.** Many require
+  specific input sizes (near SIZE_MAX) that may be blocked by upstream
+  validation. Document the specific conditions needed for overflow.
 - Avoid per-issue directory name collisions when running concurrently — use
   a zero-padded counter and hold a `flock` on `issues/.lock` while you
   allocate a new one.

@@ -66,20 +66,30 @@ flags and examples.
     - Is global program state manipulated in a surprising manner?
     - Can the function fail silently?
     - Do callers of the function properly check for errors for this function?
+   
+   **⚠️ IMPORTANT: All issues found at this stage are THEORETICAL. They are
+   potential bugs based on code analysis, NOT confirmed vulnerabilities. Stage 7
+   MUST verify each with a concrete trigger before marking as confirmed.**
+   
    Build a JSON entry:
-   - `intent`: what the programmer appears to want the function to do,
-     inferred from the name, comments, call sites, and neighbours.
-   - `issues[]`: for each discrepancy (integer overflow, unchecked length,
-     TOCTOU, missed error path, sign mismatch, inconsistent locking, etc.),
-     one `{severity, category, description}` record. Prefer categories
-     already present in the DB — run `fnaudit list` once at the start and
-     reuse the vocabulary.
-   - `global_state.reads[]` / `writes[]`: lists of globals / statics /
-     singleton accessors touched.
-   - `preconditions` / `postconditions`: what must hold on entry / what
-     holds on return. Useful when intent is subtle.
-   - `reviewer`: "vulpine/<agent>/<model-id>" so benchmark runs are
-     distinguishable.
+    - `intent`: what the programmer appears to want the function to do,
+      inferred from the name, comments, call sites, and neighbours.
+    - `issues[]`: for each discrepancy (integer overflow, unchecked length,
+      TOCTOU, missed error path, sign mismatch, inconsistent locking, etc.),
+      one `{severity, category, description}` record. Prefer categories
+      already present in the DB — run `fnaudit list` once at the start and
+      reuse the vocabulary.
+      
+      **Each issue MUST include:**
+      - `verification_status`: "theoretical" (default) or "confirmed-by-stage7"
+      - `testability_notes`: Brief explanation of how one might craft a trigger
+      - `verification_blocked_by`: If known, what prevents trigger creation
+    - `global_state.reads[]` / `writes[]`: lists of globals / statics /
+      singleton accessors touched.
+    - `preconditions` / `postconditions`: what must hold on entry / what
+      holds on return. Useful when intent is subtle.
+    - `reviewer`: "vulpine/<agent>/<model-id>" so benchmark runs are
+      distinguishable.
 
 3. Write all entries for this feature to `features/$feature/entries.jsonl`,
    then bulk-insert:
@@ -107,6 +117,14 @@ flags and examples.
 - Do not author an entry from the function name alone. Read the body.
 - Do not write entries for third-party code the project vendors but does not
   own — skip and note.
+- **CRITICAL: All issues reported at this stage are THEORETICAL.** They are
+  based on code analysis, not on confirmed triggers. Stage 7 MUST verify each
+  with a working PoC before any issue can be considered "confirmed". Always
+  set `verification_status: "theoretical"` and add `testability_notes` to help
+  stage 7 craft triggers.
+- **Do not overstate severity.** A potential integer overflow that requires
+  input of exactly SIZE_MAX bytes may be "theoretical" if upstream validation
+  makes such input impossible. Be honest about practical exploitability.
 - Keep each `intent` and each `issues[].description` to 1–3 sentences.
   Stage 7 reads hundreds of these.
 - Never open the `.db` with `sqlite3` to shortcut. The hash/`reviewed_at`
