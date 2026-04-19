@@ -25,7 +25,8 @@ $VULPINE_RUN/features/
 │   ├── coverage.json           # gcov output for the feature
 │   ├── baseline.coverage.json  # gcov output for a null invocation
 │   ├── trace.ftrc              # cppfunctrace binary trace
-│   └── functions.txt           # sorted list of functions uniquely associated with the feature
+│   ├── functions.txt           # sorted list of functions uniquely associated with the feature
+│   └── sanity.json             # harness sanity-check results (entry-point hit, coverage delta, top-N justifications)
 ├── F2-<slug>/
 │   └── …
 └── SUMMARY.md                  # one row per feature with function-count + notes
@@ -59,12 +60,52 @@ For each feature `Fi` in `ATTACK_SURFACE.md`:
    prefer functions that are (a) deep in the callgraph, (b) touch
    attacker-controlled data, (c) allocate / free / memcpy / parse.
 
+7. **MANDATORY: Sanity-check the harness empirically.** A coverage diff that
+   silently produces noise downstream is the worst failure mode of this stage.
+   Before declaring `Fi` mapped, verify ALL of the following and record the
+   results in `features/$feature/sanity.json`:
+
+   - **Entry-point hit:** the documented entry-point symbol(s) for `Fi` from
+     `ATTACK_SURFACE.md` MUST appear in both `coverage.json` and `trace.ftrc`.
+     If they do not, the fuzzer is exercising the wrong code path — fix it
+     before moving on. (Use `cppfunctrace`'s SQL interface to grep the trace.)
+   - **Non-trivial coverage delta:** `|hit_by(Fi)| - |hit_by(baseline)|` MUST
+     exceed a small threshold (default: 5 functions, or 1% of `|hit_by(Fi)|`,
+     whichever is larger). A delta below that means the baseline is hitting
+     the same code as the feature — tighten the baseline (use truly empty
+     input, or input the dispatch rejects at the very first byte).
+   - **Top-N spot check:** read the names of the top 10 functions in
+     `functions.txt`. For each, write one sentence in `sanity.json` explaining
+     why it plausibly belongs to `Fi`. If you cannot, the function-set is
+     contaminated — investigate.
+
+   `sanity.json` shape:
+
+   ```json
+   {
+     "entry_points_seen":   ["http2_frame_dispatch", "h2_priority_handle"],
+     "entry_points_missing": [],
+     "coverage_delta":       142,
+     "baseline_size":        318,
+     "feature_size":         460,
+     "top_n_justifications": [
+       {"symbol": "h2_priority_handle", "reason": "documented entry point for PRIORITY frames"},
+       {"symbol": "h2_stream_lookup",   "reason": "called from priority handler to resolve stream id"},
+       ...
+     ]
+   }
+   ```
+
+   If any of these checks fails, do NOT fan out a function-auditor for `Fi`
+   — record the failure in `SUMMARY.md` and move on.
+
 Once all features are mapped, write `SUMMARY.md`.
 
 ## Fan-out to function-auditor
 
-After `SUMMARY.md` is written, for every feature `Fi` launch a
-`function-auditor` subagent via the Agent tool. Pass:
+After `SUMMARY.md` is written, for every feature `Fi` **that passed the
+sanity check in step 7** launch a `function-auditor` subagent via the Agent
+tool. Skip features whose `sanity.json` reports a failure. Pass:
 
 - `VULPINE_RUN=<abs path>`
 - `feature=Fi-<slug>`

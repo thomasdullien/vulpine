@@ -49,6 +49,41 @@ flags and examples.
    `source_commit` matches the current commit — those are already audited
    for this revision.
 
+1a. **MANDATORY: Empirical reachability cross-reference.** Before authoring
+    issues, classify every function in `functions_file` by whether it was
+    actually observed at runtime under the stage-5 fuzzer. The trace lives
+    at `$VULPINE_RUN/features/$feature/trace.ftrc` — open it via the
+    `cppfunctrace` skill (which exposes the trace as a SQLite table) and
+    extract the set of called functions. Then for each symbol you intend to
+    audit, decide:
+
+    - **observed**: the symbol appears in `trace.ftrc`. Audit normally.
+    - **unobserved-but-reachable**: the symbol does NOT appear in
+      `trace.ftrc` but `codenav reachable --from <Fi entry point>` says it
+      can be reached. Audit, but on every issue set
+      `verification_blocked_by: "not observed in stage-5 trace; reachable
+      statically but the existing fuzzer does not exercise it"` and **cap
+      severity at `medium`** regardless of how bad the bug looks. Stage 7
+      will need a richer trigger to confirm.
+    - **unreachable**: codenav says the symbol is not reachable from the
+      feature's entry point at all. Almost certainly noise from the coverage
+      diff — record it in `features/$feature/skipped.txt` with the reason
+      and skip auditing.
+
+    Persist the classification to `features/$feature/reachability.json`:
+
+    ```json
+    {
+      "observed":              ["h2_priority_handle", "h2_stream_lookup", ...],
+      "unobserved_reachable":  ["h2_priority_decode_weight", ...],
+      "unreachable_skipped":   ["unrelated_helper_seen_due_to_baseline_drift", ...]
+    }
+    ```
+
+    The reasoning is: stage 6 is static, but it can cheaply verify that the
+    code it is reasoning about is real (was executed) versus theoretical
+    (could be executed). Treating those identically inflates severity.
+
 2. Analyze each function carefully for the following issues:
   - 'intent': What the programmer appears to want the function to do,
     inferred from the name, comments, call sites, neighbors, and the code.
@@ -82,8 +117,13 @@ flags and examples.
       
       **Each issue MUST include:**
       - `verification_status`: "theoretical" (default) or "confirmed-by-stage7"
-      - `testability_notes`: Brief explanation of how one might craft a trigger
-      - `verification_blocked_by`: If known, what prevents trigger creation
+      - `testability_notes`: Brief explanation of how one might craft a trigger.
+        If the function was observed in `trace.ftrc`, point at the seed input
+        in `features/$feature/seeds/` that reached it as a starting harness.
+      - `verification_blocked_by`: If known, what prevents trigger creation.
+        For unobserved-but-reachable functions (see step 1a), this MUST be
+        populated with the standard reason and severity MUST be capped at
+        `medium`.
     - `global_state.reads[]` / `writes[]`: lists of globals / statics /
       singleton accessors touched.
     - `preconditions` / `postconditions`: what must hold on entry / what

@@ -20,10 +20,14 @@ race, TOCTOU — and produce a per-issue artifact set that proves each finding.
 ```
 $VULPINE_RUN/issues/
 ├── 001-<short-slug>/
-│   ├── report.md           # see structure below
+│   ├── report.md           # see structure below; MUST include "Verification Status" section
 │   ├── trigger.bin         # minimal input that causes the bad state
 │   ├── trigger.sh          # exact command that reproduces it
-│   └── verify.gdb          # gdb script that asserts the bad state is reached
+│   ├── verify.gdb          # gdb script that asserts the bad state is reached
+│   ├── asan.log            # MANDATORY for CONFIRMED memory-safety issues — full sanitizer output
+│   ├── plain-rerun.log     # MANDATORY — output of trigger.sh against the non-sanitized build
+│   ├── coverage-delta.txt  # MANDATORY — gcov diff showing the new lines the trigger covered
+│   └── verify.rr           # MANDATORY for memory-corruption / UAF / double-free issues — rr replay script
 ├── 002-<short-slug>/
 │   └── …
 └── SUMMARY.md              # one row per issue, sortable by severity
@@ -59,6 +63,22 @@ etc.
 How to run trigger.sh, expected output on success, expected ASan / GDB
 signal on failure.
 
+## Verification Status
+One of:
+- **CONFIRMED** — trigger reaches the vulnerable line AND a sanitizer reports
+  the expected error. List the exact files in this directory that prove it
+  (`asan.log`, `verify.gdb` output, `verify.rr` replay).
+- **UNCONFIRMED** — trigger reaches the line (per `line-execution-checker`)
+  but no sanitizer fired. Explain the discrepancy. Severity is capped at
+  `medium` regardless of theoretical impact.
+- **THEORETICAL** — no trigger could be crafted that reaches the code.
+  Document what blocked trigger creation. Severity is capped at `low`.
+
+## Plain-build behaviour
+What `plain-rerun.log` shows when the same trigger runs against the
+non-sanitized build. If it does not crash plain but ASan fires, this is
+typically a sub-page out-of-bounds read or a benign UB — call this out.
+
 ## Fix sketch
 One paragraph — enough that a maintainer could write the patch.
 ```
@@ -90,18 +110,34 @@ and demonstrates the bad state. Issues without working PoCs should be marked as
      confirmed to reach the vulnerable line.
    - Gate the trigger with `line-execution-checker`: if the suspected
      vulnerable line did not execute, the trigger is wrong — revise.
-   - **MANDATORY: Verify under sanitizers.** Run the trigger under the 
-     sanitized build. If ASan / UBSan / TSan reports — success, you have a 
-     primitive. **If not, the bug theory is unconfirmed.** Either revise, 
-     or mark as "theoretical" in the report with clear explanation of why 
-     concrete verification failed.
-   - **MANDATORY: Create verification scripts.** Write `verify.gdb` that sets 
-     a breakpoint at the primitive site and asserts the expected register / 
-     memory state. Write `verify.rr` script for rr replay if needed. A third 
-     party should be able to run these to independently confirm the issue.
-   - For tricky corruptions (read at one site, write at another), use the
-     `rr-debugger` skill: record the crashing run, replay under rr to walk
-     back from the corruption to the actual bug.
+   - **MANDATORY: Verify under sanitizers.** Run the trigger under the
+     sanitized build and **save the full sanitizer output to `asan.log`** in
+     the issue directory. If ASan / UBSan / TSan reports — success, you have
+     a primitive. **If not, the bug theory is unconfirmed.** Either revise,
+     or mark as "UNCONFIRMED" in the report with clear explanation. Severity
+     is capped at `medium` for unconfirmed issues regardless of how bad they
+     look on paper.
+   - **MANDATORY: Rerun against the plain (non-sanitized) build.** Save the
+     output to `plain-rerun.log`. An issue that crashes ASan but not plain
+     is typically a benign UB or sub-page OOB read — note it explicitly in
+     `report.md` under "Plain-build behaviour" and consider capping severity.
+     An issue that crashes plain too is a much stronger signal.
+   - **MANDATORY: Record coverage delta.** Use the `gcov-coverage` skill to
+     diff the trigger's coverage against the stage-5 baseline coverage for
+     the same feature, and save the diff (the new lines covered) to
+     `coverage-delta.txt`. The vulnerable line MUST appear in this diff. If
+     it does not, the trigger is wrong — revise.
+   - **MANDATORY: Create GDB verification script.** Write `verify.gdb` that
+     sets a breakpoint at the primitive site and asserts the expected
+     register / memory state. A third party MUST be able to run it
+     independently and reach the same conclusion.
+   - **MANDATORY for memory-corruption issues** (UAF, double-free, OOB
+     write, heap-overflow, type confusion, use-of-uninitialized-memory):
+     **default to capturing an rr trace.** Use the `rr-debugger` skill to
+     record the crashing run, then write a `verify.rr` script that drives
+     `rr replay` to the corruption site (and, where useful, `reverse-cont`
+     back to the actual bug). For pure logic bugs and info-leaks, `verify.rr`
+     is optional but encouraged.
 5. Budget: do not spend unbounded time on a single lead. If after a few
    cycles you cannot make a trigger reach the suspect line, note it in
    `issues/XXX-negative/report.md` and move on — stage 8 may be able to
@@ -114,14 +150,16 @@ and demonstrates the bad state. Issues without working PoCs should be marked as
    `issues[]` entry on the corresponding symbol via `fnaudit bulk-add` — so
    stage 8 reads a single source of truth.
 
-**Output Requirements for Each Issue:**
-- `report.md` with explicit "Verification Status" section stating:
-  - CONFIRMED: Trigger reaches vulnerable line + sanitizer reports issue
-  - UNCONFIRMED: Trigger reaches line but no sanitizer report (explain why)
-  - THEORETICAL: Cannot craft trigger that reaches the code
-- `trigger.bin` + `trigger.sh`: Working reproduction
-- `verify.gdb`: GDB script asserting bad state is reached
-- `verify.rr` (optional): rr script for deterministic replay
+**Output Requirements for Each Issue (mirror of the Output contract):**
+- `report.md` with explicit "Verification Status" and "Plain-build behaviour"
+  sections. Status is one of CONFIRMED / UNCONFIRMED / THEORETICAL.
+- `trigger.bin` + `trigger.sh` — working reproduction
+- `asan.log` — full sanitizer output (mandatory for memory-safety claims)
+- `plain-rerun.log` — output from the non-sanitized build (mandatory for all)
+- `coverage-delta.txt` — gcov diff proving the vulnerable line was reached
+- `verify.gdb` — GDB script asserting bad state
+- `verify.rr` — rr replay script (mandatory for memory-corruption issues,
+  optional for logic bugs / info-leaks)
 
 ## Skills
 
