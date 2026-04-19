@@ -19,6 +19,12 @@ For sub-tasks that warrant a narrow sub-invocation (e.g. "build a minimal
 TLS client harness"), invoke an appropriate subagent by name through
 OpenCode's native subagent dispatch.
 
+For critical memory-corruption findings, this stage drives a sequential
+4-round loop between two dedicated subagents — `crash-analyzer` (produces
+the per-round hypothesis) and `crash-analyzer-checker` (accepts or writes
+a rebuttal). Both live alongside this agent under
+`~/.config/opencode/agents/`. Invoke them by name, one round at a time.
+
 Body is shared with the Claude Code variant — including the verification
 policy, the per-issue output contract (`asan.log` / `plain-rerun.log` /
 `coverage-delta.txt` / `verify.gdb` / `verify.rr`), and the

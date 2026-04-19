@@ -27,7 +27,13 @@ $VULPINE_RUN/issues/
 │   ├── asan.log            # MANDATORY for CONFIRMED memory-safety issues — full sanitizer output
 │   ├── plain-rerun.log     # MANDATORY — output of trigger.sh against the non-sanitized build
 │   ├── coverage-delta.txt  # MANDATORY — gcov diff showing the new lines the trigger covered
-│   └── verify.rr           # MANDATORY for memory-corruption / UAF / double-free issues — rr replay script
+│   ├── verify.rr           # MANDATORY for memory-corruption / UAF / double-free issues — rr replay script
+│   └── evidence/           # MANDATORY for critical memory-corruption issues — crash-analyzer chain
+│       ├── root-cause-hypothesis-001.md
+│       ├── root-cause-hypothesis-001-rebuttal.md   # present iff round 1 was rejected
+│       ├── root-cause-hypothesis-002.md            # subsequent rounds, up to 4
+│       ├── …
+│       └── root-cause-hypothesis-NNN-verdict.md    # final ACCEPT (or absent if CONTESTED)
 ├── 002-<short-slug>/
 │   └── …
 └── SUMMARY.md              # one row per issue, sortable by severity
@@ -67,7 +73,14 @@ signal on failure.
 One of:
 - **CONFIRMED** — trigger reaches the vulnerable line AND a sanitizer reports
   the expected error. List the exact files in this directory that prove it
-  (`asan.log`, `verify.gdb` output, `verify.rr` replay).
+  (`asan.log`, `verify.gdb` output, `verify.rr` replay). For critical
+  memory-corruption categories the `evidence/` chain must also be present
+  and end in a `…-verdict.md` with `VERDICT: ACCEPT`.
+- **CONTESTED** — trigger and sanitizer report exist, but the
+  crash-analyzer-checker rejected all 4 rounds of the evidence chain. The
+  bug is reachable and crashes, but the causal story is not yet proven to
+  forensic standard. Severity is capped at `high` (never `critical`).
+  Stage 8 may still chain it into an exploit, which would retro-promote it.
 - **UNCONFIRMED** — trigger reaches the line (per `line-execution-checker`)
   but no sanitizer fired. Explain the discrepancy. Severity is capped at
   `medium` regardless of theoretical impact.
@@ -88,7 +101,12 @@ One paragraph — enough that a maintainer could write the patch.
 **⚠️ CRITICAL REMINDER: Static analysis alone is NOT sufficient. Every suspected
 bug MUST be verified with a concrete trigger that reaches the vulnerable code
 and demonstrates the bad state. Issues without working PoCs should be marked as
-"theoretical" or "unconfirmed", not as confirmed vulnerabilities.**
+"theoretical" or "unconfirmed", not as confirmed vulnerabilities.
+For critical memory-corruption findings (UAF, double-free, OOB write, heap/
+stack overflow, type confusion, use-of-uninit), a passing sanitizer is also
+not sufficient — you must drive the `crash-analyzer` → `crash-analyzer-checker`
+loop (up to 4 rounds) to ACCEPT before the issue becomes CONFIRMED. If all 4
+rounds are rejected, mark the issue CONTESTED (severity capped at `high`).**
 
 1. Set `FNAUDIT_DB=$VULPINE_RUN/audit-log.db` for this shell, then read the
    `fnaudit` skill's SKILL.md. Use its CLI as documented; do not invent
@@ -138,6 +156,39 @@ and demonstrates the bad state. Issues without working PoCs should be marked as
      `rr replay` to the corruption site (and, where useful, `reverse-cont`
      back to the actual bug). For pure logic bugs and info-leaks, `verify.rr`
      is optional but encouraged.
+   - **MANDATORY for CRITICAL memory-corruption issues only: crash-analyzer
+     evidence loop.** If the issue is `severity=critical` AND its category
+     is one of {use-after-free, double-free, out-of-bounds-write,
+     heap-buffer-overflow, stack-buffer-overflow, type-confusion,
+     use-of-uninitialized-memory}, drive an iterative evidence chain as
+     follows (non-critical or non-memory-corruption issues skip this step
+     entirely — the verify.rr script above is sufficient for them):
+
+     ```
+     for round in 1..4:
+         invoke crash-analyzer subagent with (issue_dir, round,
+             rebuttal_path if round>1)
+         → writes evidence/root-cause-hypothesis-<round>.md
+         invoke crash-analyzer-checker subagent with (issue_dir,
+             hypothesis_path, round)
+         → writes either -verdict.md (ACCEPT) or -rebuttal.md (REJECT)
+         if ACCEPT:
+             report.md Verification Status = CONFIRMED; break
+     if no ACCEPT after round 4:
+         report.md Verification Status = CONTESTED
+         cap report.md Severity at `high` regardless of the original claim
+         preserve the last hypothesis and the last rebuttal
+         note in SUMMARY.md that this issue is CONTESTED and why
+     ```
+
+     Invoke via the Agent tool with `subagent_type: "crash-analyzer"` and
+     `subagent_type: "crash-analyzer-checker"`. Do not run them in parallel
+     — each round is sequential. Do not skip a round because the previous
+     rebuttal "seems minor"; the checker is authoritative.
+
+     The crash-analyzer needs an rr recording to work with; if you have not
+     captured one yet under `issue_dir/rr-trace/`, do so before starting
+     round 1.
 5. Budget: do not spend unbounded time on a single lead. If after a few
    cycles you cannot make a trigger reach the suspect line, note it in
    `issues/XXX-negative/report.md` and move on — stage 8 may be able to
@@ -152,7 +203,7 @@ and demonstrates the bad state. Issues without working PoCs should be marked as
 
 **Output Requirements for Each Issue (mirror of the Output contract):**
 - `report.md` with explicit "Verification Status" and "Plain-build behaviour"
-  sections. Status is one of CONFIRMED / UNCONFIRMED / THEORETICAL.
+  sections. Status is one of CONFIRMED / CONTESTED / UNCONFIRMED / THEORETICAL.
 - `trigger.bin` + `trigger.sh` — working reproduction
 - `asan.log` — full sanitizer output (mandatory for memory-safety claims)
 - `plain-rerun.log` — output from the non-sanitized build (mandatory for all)
@@ -160,8 +211,15 @@ and demonstrates the bad state. Issues without working PoCs should be marked as
 - `verify.gdb` — GDB script asserting bad state
 - `verify.rr` — rr replay script (mandatory for memory-corruption issues,
   optional for logic bugs / info-leaks)
+- `evidence/` — crash-analyzer / crash-analyzer-checker loop artifacts
+  (mandatory ONLY for critical memory-corruption issues; absent otherwise).
+  Must contain ≥1 `root-cause-hypothesis-NNN.md`. On CONFIRMED, also
+  contains the accepting `…-verdict.md`. On CONTESTED, contains 4
+  hypotheses and 4 rebuttals with no verdict file.
 
-## Skills
+## Skills and subagents
+
+Skills:
 
 - `fnaudit` — schema + CLI for reading and updating audit entries.
   Authoritative.
@@ -172,6 +230,13 @@ and demonstrates the bad state. Issues without working PoCs should be marked as
   replay.
 - `gcov-coverage` — to confirm new triggers broaden coverage in the right
   direction.
+
+Subagents (invoke via the Agent tool):
+
+- `crash-analyzer` — produces the per-round `root-cause-hypothesis-NNN.md`
+  for a critical memory-corruption issue. One invocation per round.
+- `crash-analyzer-checker` — validates the hypothesis. One invocation per
+  round, right after the analyzer.
 
 ## Footguns
 
@@ -196,6 +261,15 @@ and demonstrates the bad state. Issues without working PoCs should be marked as
 - Avoid per-issue directory name collisions when running concurrently — use
   a zero-padded counter and hold a `flock` on `issues/.lock` while you
   allocate a new one.
+- **Do not skip the crash-analyzer loop for critical memory-corruption
+  issues.** "I already have ASan + verify.rr, that's good enough" is
+  exactly the overconfidence this loop exists to catch. Run it. If the
+  hypothesis is correct, the checker will accept quickly; if it's wrong,
+  the rebuttals will teach you what you missed.
+- **Do not run the crash-analyzer loop for non-critical issues.** The
+  loop is expensive. For severity ≤ high, or for non-memory-corruption
+  categories, the existing `verify.rr` / `verify.gdb` / `asan.log`
+  artefacts are the bar.
 
 ## Return value
 

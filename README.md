@@ -19,7 +19,7 @@ models (open and closed) on the same vulndev workflow.
 | 4 | `configuration`              | `configure-target.sh` — turns the container into a realistic deployment. |
 | 5 | `attack-surface-mapping`     | `features/<feature>/` — minimal deterministic fuzzer + gcov coverage → function set. Fans out to N copies of agent 6. |
 | 6 | `function-auditor`           | `audit-log.db` — intent vs. implementation summary for every touched function, plus a ranked list of misbehaving ones. |
-| 7 | `code-auditor`               | `issues/<id>/` — report, minimal trigger, GDB verification script. |
+| 7 | `code-auditor` (+ `crash-analyzer` / `crash-analyzer-checker`) | `issues/<id>/` — report, minimal trigger, GDB verification script. For critical memory-corruption findings, drives a ≤4-round analyzer/checker loop producing an `evidence/` chain with real rr output; unresolved after 4 rounds → CONTESTED (severity capped at `high`). |
 | 8 | `exploit-developer`          | `exploit/` — chained-bug exploit attempts + `EXPLOIT_LEARNINGS.md`. |
 
 A top-level `vulpine-orchestrator` agent (Claude Code) / `/vulpine` command
