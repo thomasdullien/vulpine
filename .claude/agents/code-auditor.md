@@ -146,6 +146,37 @@ One paragraph — enough that a maintainer could write the patch.
 
 ## Approach
 
+0. **Library → application upgrade pass (run FIRST).** For every
+   existing `issues/*/report.md` whose `## Evidence layer` reads
+   `library`, attempt to upgrade it to `application` before hunting
+   new leads. The trigger bytes are already written; the daemon
+   wrappers from stage 1 are already built; the only new work is the
+   minimal client invocation that delivers those bytes through the
+   real protocol.
+
+   Per issue:
+   - Identify the attacker entry point from `ATTACK_SURFACE.md` (e.g.
+     for a liblber bug → LDAP PDU to slapd; for a pjmedia SDP bug →
+     SIP INVITE; for a krb5 asn.1 bug → AS-REQ).
+   - `configure-target.sh --asan` to start the ASan daemon. (Add
+     `--traced` if you also want the function-call trace.)
+   - Re-drive the trigger bytes through the real protocol: a one-line
+     `ldapsearch` / `curl` / `python` client / `nc` is usually
+     sufficient.
+   - Capture ASan via `$VULPINE_ROOT/tools/capture-asan.sh <issue-dir>
+     -- <client>`, with the daemon's stderr teed into asan.log.
+   - If the `#0` stack frame lands inside `$VULPINE_RUN/build/` under
+     the daemon binary: flip `## Evidence layer: application`,
+     re-evaluate severity (no longer capped at medium), re-run
+     `validate-issue.sh`.
+   - If it doesn't reach the daemon: leave `Evidence layer: library`,
+     add one sentence to Verification Status naming which entry
+     points you tried. Stage 8 revisits.
+
+   Do NOT skip this pass. "Looks like too much work" is not a valid
+   reason; each upgrade should take <5 minutes and turns weak
+   library-evidence primitives into real application-layer findings.
+
 1. **Per-feature briefings, not raw audit log.** For each feature dir
    with an `audit-summary.md` (emitted by stage 6), read the summary
    once. It ranks leads by severity × reachability-evidence and flags
