@@ -158,6 +158,33 @@ For each feature `Fi` in `ATTACK_SURFACE.md`:
    If any of these checks fails, do NOT fan out a function-auditor for `Fi`
    — record the failure in `SUMMARY.md` and move on.
 
+8. **HARD GATE: run `$VULPINE_ROOT/tools/validate-feature.sh` per feature,
+   in-turn, before moving on.** The spec wording above is necessary but not
+   sufficient — past runs showed agents repeatedly skipping the daemon
+   trace even when `configure-target.sh --traced` was available. The
+   validator closes that loophole mechanically.
+
+   ```bash
+   $VULPINE_ROOT/tools/validate-feature.sh features/$feature/
+   ```
+
+   The gate checks: `fuzz.sh`, `functions.txt`, `coverage.json`,
+   `baseline.coverage.json`, `sanity.json` non-empty; `sanity.json`'s
+   `entry_points_seen` non-empty, `coverage_delta ≥ 5`,
+   `top_n_justifications` populated; AND — if the target ships a daemon
+   (detected via `$VULPINE_RUN/build/run-traced-<name>.sh`, excluding
+   `run-traced-harness-*.sh`) — `trace.ftrc` and `trace.perfetto-trace`
+   non-empty. A feature that fails the gate must be fixed or explicitly
+   marked skipped; do NOT dispatch function-auditor on a failing
+   feature.
+
+   Before returning from stage 5, also run the `--all` sweep:
+   ```bash
+   $VULPINE_ROOT/tools/validate-feature.sh --all $VULPINE_RUN/features
+   ```
+   The orchestrator checks this too; if the pass rate is low, stage 6
+   will be blocked pending remediation.
+
 Once all features are mapped, write `SUMMARY.md`.
 
 ## Fan-out to function-auditor

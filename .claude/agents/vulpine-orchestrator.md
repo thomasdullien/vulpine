@@ -103,7 +103,17 @@ Two hard caps on the amount of compute a run can burn without supervision:
    pane added roughly 5 issues per iteration and every one of them
    failed the validator gate — essentially pure waste.
 
-2. **Stage-7 pass-rate gate.** After stage 7 returns, run
+2. **Stage-5 feature-validation gate.** After stage 5 returns, run
+   `$VULPINE_ROOT/tools/validate-feature.sh --all $VULPINE_RUN/features/`.
+   If any feature fails — missing mandatory artefact, empty sanity-check,
+   OR (for daemon targets) missing `trace.ftrc` — do NOT advance to
+   stage 6. Instead, re-dispatch stage 5 with a remediation prompt
+   naming the failing features and the specific fix each needs (run the
+   daemon under `configure-target.sh --traced` to capture the trace,
+   or populate the missing coverage/sanity data). Stage 6 runs only
+   after every feature passes.
+
+3. **Stage-7 pass-rate gate.** After stage 7 returns, run
    `$VULPINE_ROOT/tools/validate-issue.sh --all $VULPINE_RUN/issues/`
    and check the summary. If the pass rate is < 50%, do NOT advance to
    stage 8 — the corpus is too polluted for exploit-developer to extract
@@ -114,10 +124,11 @@ Two hard caps on the amount of compute a run can burn without supervision:
    Status) or delete it." Stage 8 runs only after the pass rate crosses
    the threshold.
 
-3. **Stage-7 output summary.** Always emit
-   `$VULPINE_RUN/issues/VALIDATOR_SUMMARY.txt` with the per-issue
-   pass/fail lines from the validator at stage-7 exit. The user will
-   read it — it's the ground truth on what's real vs. theatre.
+4. **Stage-5 and stage-7 output summaries.** After each of those stages,
+   emit a summary text file next to the artefacts:
+   - `$VULPINE_RUN/features/VALIDATOR_SUMMARY.txt` after stage 5.
+   - `$VULPINE_RUN/issues/VALIDATOR_SUMMARY.txt` after stage 7.
+   The user reads these — they're ground truth on what's real vs. theatre.
 
 ## Subagent invocation pattern
 
