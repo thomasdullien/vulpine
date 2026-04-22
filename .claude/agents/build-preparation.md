@@ -33,13 +33,37 @@ $VULPINE_RUN/build/
 └── README.md                   # one-page: how to run each variant
 ```
 
-## Runnable-under-ASan wrappers (MANDATORY)
+## Host environment
 
-Stage 7 cannot CONFIRM memory-corruption without running the upstream
-binary under ASan. Emit one `$VULPINE_RUN/build/run-asan-<name>.sh` per
-network-facing daemon or CLI entry point (e.g. `krb5kdc`, `slapd`,
-`opusdec`). Each wrapper exports the sanitizer options and `exec`s the
-ASan-built binary:
+This pipeline runs on Debian (12+) with PEP-668-protected system Python.
+Any Python package installation MUST go through a venv or pipx — do
+NOT attempt `pip install <foo>` against the system interpreter; it will
+fail with `externally-managed-environment`. The recommended pattern is:
+
+```bash
+# one-shot use (preferred for short-lived tooling needs):
+pipx install <pkg>
+
+# if pipx isn't available:
+python3 -m venv "$VULPINE_RUN/build/venv"
+"$VULPINE_RUN/build/venv/bin/pip" install <pkg>
+```
+
+`vulpine/scripts/install-tools.sh` already follows this pattern for
+fnaudit; re-use it for any other Python dependency you need to install.
+
+## Runnable wrappers: ASan + traced (both MANDATORY)
+
+Stages 5, 6, and 7 exercise the target through its real network/CLI
+entry points, not via standalone library harnesses. Stage 1 must emit
+two wrapper scripts per network-facing daemon or CLI (`krb5kdc`,
+`kadmind`, `slapd`, `pjsua`, `opusdec`, …): one for the ASan-built
+binary, one for the cppfunctrace-instrumented binary.
+
+### run-asan-<name>.sh
+
+Stage 7 CONFIRMED memory-corruption requires running the upstream
+binary under ASan and capturing a real crash banner.
 
 ```bash
 #!/usr/bin/env bash
@@ -49,13 +73,38 @@ export ASAN_SYMBOLIZER_PATH="$(command -v llvm-symbolizer || command -v addr2lin
 exec "$VULPINE_RUN/build/build-asan/sbin/<name>" "$@"
 ```
 
-Verify each wrapper by invoking it with `--help` or equivalent and
-confirming the binary loads. A wrapper that won't start is a stage-1 bug.
+### run-traced-<name>.sh
 
-For library-only targets, emit `run-asan-harness-<libname>.sh` that execs
-a ≤100-line C host program in `$VULPINE_RUN/build/src-host/` linking the
-upstream library via published headers. The host MUST NOT re-implement
-any upstream function.
+Stage 5's per-feature reachability classification needs a dynamic
+function-call trace collected from the real daemon while it serves an
+attacker-flavoured request — NOT from a standalone library harness that
+re-implements the call site.
+
+```bash
+#!/usr/bin/env bash
+export CPPFUNCTRACE_OUT="${CPPFUNCTRACE_OUT:-/tmp/$(basename "$0" .sh)-$$.ftrc}"
+export CPPFUNCTRACE_TRACE_CHILDREN=1
+exec "$VULPINE_RUN/build/build-traced/sbin/<name>" "$@"
+```
+
+`CPPFUNCTRACE_TRACE_CHILDREN=1` is mandatory for forking servers
+(slapd, kadmind in accept-loop mode); without it the worker that
+handles the request writes nothing.
+
+### Verify each wrapper
+
+Invoke it with `--help` or equivalent. The ASan wrapper should show
+a libasan-interposed startup and the normal help output; the traced
+wrapper should exit normally and leave a small `.ftrc` file at
+`$CPPFUNCTRACE_OUT`. A wrapper that won't start is a stage-1 bug.
+
+### Library-only targets
+
+For targets that ship library code only (no daemon, no CLI), emit
+`run-{asan,traced}-harness-<libname>.sh` execing a ≤100-line C host
+program in `$VULPINE_RUN/build/src-host/` linking the upstream library
+via published headers. The host MUST NOT re-implement any upstream
+function.
 
 The container must:
 

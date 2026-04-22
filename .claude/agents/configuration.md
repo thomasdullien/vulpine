@@ -24,13 +24,20 @@ A single bash script: `$VULPINE_RUN/configure-target.sh`.
 
 Contract for the script:
 
-- Takes an optional `--asan` flag. Without it, starts the `plain`
-  (stage-1 `build-plain/`) binaries. With it, starts the stage-1
-  `run-asan-<daemon>.sh` wrappers instead, with their stderr redirected
-  to `$VULPINE_RUN/daemon-asan.log` so stage 7 can grep it for crash
-  banners. The two modes must otherwise configure the target
-  identically (same config files, same ports, same users) — only the
-  binary path differs.
+- Three mutually-exclusive modes:
+  - default (no flag) — starts the `build-plain/` binaries.
+  - `--asan` — starts the stage-1 `run-asan-<daemon>.sh` wrappers;
+    stderr tees to `$VULPINE_RUN/daemon-asan.log` so stage 7 can grep
+    for crash banners.
+  - `--traced` — starts the stage-1 `run-traced-<daemon>.sh` wrappers
+    (cppfunctrace-instrumented). On shutdown, SIGTERMs the daemon so
+    the trace buffer flushes, then converts the emitted `.ftrc` files
+    to `.perfetto-trace` via `ftrc2perfetto` and leaves them at
+    `$VULPINE_RUN/daemon-traced.ftrc` + `daemon-traced.perfetto-trace`
+    for stage 5 to consume.
+  All three modes must otherwise configure the target identically
+  (same config files, same ports, same users) — only the binary path
+  and instrumentation differ.
 - Exits 0 if configuration succeeds.
 - Is idempotent: running it twice leaves the container in the same state.
   If a previous invocation left a daemon running, stop it before
@@ -40,13 +47,14 @@ Contract for the script:
   Any required assets must live under `$VULPINE_RUN/build/` and be referenced
   from there.
 - Starts the target in the background if the target is a daemon, and writes
-  its PID to `/run/target.pid` inside the container. Under `--asan` the
-  PID written is the ASan wrapper's PID (same tree), so killing it kills
-  the underlying binary too.
+  its PID to `/run/target.pid` inside the container. Under `--asan` /
+  `--traced` the PID written is the wrapper's PID (same process tree),
+  so killing it kills the underlying binary too.
 - Writes a one-line summary of what it configured to stdout (e.g. "listening
   on tcp/8443 with self-signed cert at /etc/target/cert.pem, admin user
-  'root' password 'root', database seeded with 3 rows"). Under `--asan`,
-  also print the absolute path to `daemon-asan.log`.
+  'root' password 'root', database seeded with 3 rows"). Also prints the
+  absolute path to `daemon-asan.log` (`--asan`) or
+  `daemon-traced.perfetto-trace` (`--traced`).
 
 ## Approach
 

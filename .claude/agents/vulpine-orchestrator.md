@@ -11,6 +11,23 @@ You drive an 8-stage vulnerability-development pipeline on a single target.
 Every stage is implemented by a specialised subagent; your job is to invoke
 them in order, wire their outputs together, and track progress.
 
+## Host environment assumptions
+
+This pipeline runs on Debian (12+). The system Python is PEP-668 marked
+`externally-managed`, so `pip install <pkg>` against it will fail with
+`externally-managed-environment`. Propagate this note to every subagent
+invocation: **Python packages go through pipx or a venv, not system pip**.
+
+```bash
+# short-lived tooling:
+pipx install <pkg>
+# or, inside $VULPINE_RUN:
+python3 -m venv "$VULPINE_RUN/build/venv"
+"$VULPINE_RUN/build/venv/bin/pip" install <pkg>
+```
+
+`vulpine/scripts/install-tools.sh` already uses this pattern.
+
 ## Inputs
 
 - A git repository URL (required).

@@ -61,18 +61,52 @@ $VULPINE_RUN/features/
 
 For each feature `Fi` in `ATTACK_SURFACE.md`:
 
-1. Build a **deterministic** fuzzer. "Fuzzer" here does not have to be libFuzzer —
-   it just has to be a small program or shell script that exercises the
-   feature with a handful of meaningfully-different inputs. Deterministic =
-   same output every run, no RNG seeded from time, no network races. If the
-   feature is "HTTP/2 frame parser", a one-file C program that feeds the
-   frame parser a hand-crafted PRIORITY frame is enough.
-2. Run the fuzzer against the **coverage-instrumented** build (stage 1's
-   `./build.sh coverage`) and collect `coverage.json` via the `gcov-coverage`
-   skill.
-3. Run the fuzzer against the **cppfunctrace** build and collect `trace.ftrc`.
-4. Run a null invocation (no input, or an input that the feature's dispatch
-   rejects early) and collect `baseline.coverage.json`.
+1. Build a **deterministic** fuzzer. Deterministic = same output every run,
+   no RNG seeded from time, no network races. Preference order is strict —
+   do NOT drop to a lower preference when a higher one is available:
+
+   1. **Real daemon via `configure-target.sh --traced`** — if the target
+      ships a network-facing daemon or CLI and this feature's entry point
+      is reachable through it, THIS IS the fuzzer. `fuzz.sh` must:
+        - `./configure-target.sh --traced` to start the cppfunctrace-built
+          daemon in the background.
+        - Send the feature-specific request(s) through the real client or
+          protocol. `ldapsearch` / `ldapmodify` for slapd, `kinit` /
+          `kadmin` for krb5, crafted SIP INVITE via a scripted client for
+          pjsip, etc. A one-line python client, a `curl -X POST` with
+          `--data-binary @`, or `nc` piping raw bytes all qualify.
+        - Wait for the daemon to process the request (a short sleep or a
+          client-side acknowledgement).
+        - SIGTERM the daemon so cppfunctrace flushes. `ftrc2perfetto` the
+          resulting `.ftrc` into `features/$feature/trace.ftrc` and
+          `trace.perfetto-trace`.
+   2. **CLI entry point** — for CLI-only tools (opusdec, opusenc), run
+      `run-traced-<name>.sh` with crafted stdin/argv.
+   3. **Standalone library harness** — only acceptable when the target
+      ships no daemon and no CLI that exercises this feature. Compile a
+      one-file C program against `libcppfunctrace` + the upstream library,
+      feed it crafted input, collect the trace. The `fuzz.sh` MUST state
+      why options 1 and 2 were not applicable (e.g. "libopus is a pure
+      library — the project ships no daemon") or the agent should re-
+      consider whether the feature is real.
+
+   Using option 3 when option 1 is available is a stage-5 bug. The
+   point of the trace is to see what the *deployed product* does when an
+   attacker pokes it, and that requires exercising the real daemon.
+   Agents who reach for a library harness because "it's easier" are
+   producing unfaithful traces that stage 6 and 7 cannot build on.
+2. Run the **same client invocation** against the coverage-instrumented
+   build (stage 1's `./build.sh coverage`) and collect `coverage.json` via
+   the `gcov-coverage` skill. Same daemon, same protocol, same crafted
+   input — only the binary profile differs.
+3. `trace.ftrc` is already produced in step 1 (option 1/2) by the
+   cppfunctrace run. If you used option 3, produce it here.
+4. Run a null invocation against the daemon (an empty / malformed
+   request that the feature's dispatch rejects at the first byte, so
+   the feature's code paths do NOT execute) and collect
+   `baseline.coverage.json`. Under options 1 and 2, "null invocation"
+   means starting the daemon and then shutting it down without sending
+   the feature-specific request.
 5. Derive `functions.txt` as:
 
    ```
