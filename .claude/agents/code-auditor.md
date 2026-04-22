@@ -176,6 +176,43 @@ One paragraph — enough that a maintainer could write the patch.
           library using only published headers. The ASan `#0` frame
           MUST land inside `$VULPINE_RUN/build/`.
      Never re-implement the vulnerable function in `trigger.c`.
+
+     **Library-level vs. application-level CONFIRMED.** When the target
+     ships a daemon/CLI (most do — krb5kdc, kadmind, slapd, pjsua, …),
+     a library-harness trigger (shape 3) proves only that the *library
+     function crashes*, not that the *deployed product exposes the
+     bug*. A BER decoder flaw confirmed by a standalone liblber harness
+     is a library-level CONFIRMED; it becomes an application-level
+     CONFIRMED only once a shape-1 trigger (network bytes to slapd or
+     equivalent) fires ASan inside that same function.
+
+     Rule: if `ATTACK_SURFACE.md` names any feature whose entry point
+     plausibly calls the vulnerable function (walk it via `codenav
+     reachable --from <entry>`, or — for dynamic-dispatch paths that
+     codenav misses — check whether the function appears in any
+     `features/<F>/trace.ftrc`), you MUST use shape 1. Only fall back
+     to shape 3 when every plausible entry point demonstrably does
+     NOT reach the function.
+
+     Report.md records this explicitly. Add an `## Evidence layer`
+     section with one of:
+
+     - `application` — trigger is shape 1 (daemon under `--asan`) and
+       ASan fired inside the vulnerable function. This is the only
+       state where a memory-corruption finding should be tagged
+       `critical` or `high` without a "library-harness" caveat.
+     - `library` — trigger is shape 2 or 3 (library harness); the bug
+       is real in the library but its reachability from the deployed
+       product is not proven. Severity is capped at `medium` until a
+       shape-1 trigger is built, and the report must list the
+       attempted shape-1 paths and why each failed (e.g. "slapd's
+       `bind_req_decode` path uses `ber_scanf` format `'a'` which
+       selects the safe `LBER_BV_ALLOC` branch in ber_get_stringbv;
+       search handlers use `'m'` but the PDU buffer is over-allocated
+       by the receive layer by N bytes so the 1-byte overflow lands
+       on slack"). Stage 8 will revisit; the goal of recording the
+       "why I couldn't reach this" is to give stage 8 a starting
+       point, not to permanently close the issue.
    - `line-execution-checker`: if the vulnerable line didn't fire, the
      trigger is wrong — revise.
    - `$VULPINE_ROOT/tools/capture-asan.sh <issue-dir> -- <cmd>`: run

@@ -79,6 +79,41 @@ validate_one() {
         || { fail "$dir" "THEORETICAL caps severity at 'low' per code-auditor.md"; return 1; } ;;
   esac
 
+  # ---- Evidence layer: application (daemon trigger) vs. library (harness trigger).
+  # Extract the "## Evidence layer" value if present. `application` means
+  # the crash was observed against the real daemon/CLI. `library` means
+  # it fired via a standalone library harness — the bug is real in the
+  # library but its reach from the deployed product is not proven.
+  local ev_layer
+  ev_layer=$(awk '/^## Evidence layer/{in_s=1; next} in_s && /^## /{exit} in_s{print}' "$report" \
+             | tr -d '*' | grep -oE '\b(application|library)\b' | head -1)
+
+  # Cap: a library-level CONFIRMED memory-corruption finding cannot be
+  # tagged high or critical, because we have not proven the daemon
+  # calls the function the vulnerable way. Escalation requires a
+  # shape-1 (real-daemon) trigger, which flips the evidence layer to
+  # `application`.
+  if [ "$status" = "CONFIRMED" ] && $memcorr && [ "$ev_layer" = "library" ]; then
+    case "$severity" in
+      critical|high)
+        fail "$dir" "CONFIRMED memory-corruption with '## Evidence layer: library' caps severity at medium. Re-trigger via a shape-1 daemon/CLI entry point (configure-target.sh --asan + crafted bytes) to upgrade to '## Evidence layer: application'."
+        return 1
+        ;;
+    esac
+  fi
+
+  # When a CONFIRMED mem-corruption report is tagged high or critical,
+  # it MUST declare an evidence layer. Silence here means the report
+  # hasn't answered "library crash or product-reachable crash?".
+  if [ "$status" = "CONFIRMED" ] && $memcorr; then
+    case "$severity" in
+      critical|high)
+        [ -n "$ev_layer" ] \
+          || { fail "$dir" "CONFIRMED memory-corruption with severity=$severity requires a '## Evidence layer: application' section proving the crash was observed against the real daemon/CLI (not a library harness). Add the section or downgrade to medium with 'Evidence layer: library'."; return 1; }
+        ;;
+    esac
+  fi
+
   # ---- CONFIRMED on memory-corruption: real ASan output + verify.rr. -----
   if [ "$status" = "CONFIRMED" ] && $memcorr; then
     local asan="$dir/asan.log"
