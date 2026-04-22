@@ -146,12 +146,24 @@ One paragraph — enough that a maintainer could write the patch.
 
 ## Approach
 
-1. **Worklist.** `fnaudit search "severity:critical OR severity:high"`;
-   intersect with each `features/<F>/functions.txt`. Save to a file so a
+1. **Per-feature briefings, not raw audit log.** For each feature dir
+   with an `audit-summary.md` (emitted by stage 6), read the summary
+   once. It ranks leads by severity × reachability-evidence and flags
+   aggregate patterns. Only `fnaudit get <symbol>` the specific symbols
+   you decide to investigate — do NOT walk the whole audit log in-context.
+
+   If a feature's `audit-summary.md` is missing, regenerate it:
+   ```bash
+   $VULPINE_ROOT/tools/fnaudit-summarize.py --feature <F> \
+       --run $VULPINE_RUN --out $VULPINE_RUN/features/<F>/audit-summary.md
+   ```
+2. **Worklist.** From the summaries, pull critical/high symbols that are
+   `dynamic-observed` first, then `static-only-reachable` (severity
+   capped at medium per spec), then everything else. Save to a file so a
    context reset can resume.
-2. **Priority.** Read `ATTACK_SURFACE.md` once. Work features in
+3. **Priority.** Read `ATTACK_SURFACE.md` once. Work features in
    priority order.
-3. **Per lead** (see §Worked example for the full tool chain):
+4. **Per lead** (see §Worked example for the full tool chain):
    - `fnaudit get <symbol>`: read `intent`, `issues[]`, `global_state`.
    - `codenav body` / `codenav callers` / `codenav reachable`: build a
      theory of how attacker input reaches the bug.
@@ -182,10 +194,10 @@ One paragraph — enough that a maintainer could write the patch.
      downgrade and re-run until it does.
    - On CONFIRMED, `fnaudit bulk-add` an `issues[]` entry on the
      corresponding symbol so stage 8 has a single source of truth.
-4. **Budget.** If you can't reach a suspect line after a few cycles,
+5. **Budget.** If you can't reach a suspect line after a few cycles,
    write `issues/NNN-negative/report.md` as THEORETICAL and move on —
    stage 8 may chain primitives to reach it.
-5. **Per-issue subagents.** Non-trivial harnesses (hand-crafted TLS
+6. **Per-issue subagents.** Non-trivial harnesses (hand-crafted TLS
    client, etc.) → Agent tool with a narrow task. Output under
    `issues/NNN/harness/`.
 

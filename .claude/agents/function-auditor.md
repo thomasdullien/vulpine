@@ -121,6 +121,17 @@ Read the `fnaudit` skill's SKILL.md before writing entries. Schema fields:
    fnaudit export-jsonl $VULPINE_RUN/audit-jsonl/
    ```
 
+5. **Emit per-feature briefing** (cheapens stage 7's context):
+   ```bash
+   $VULPINE_ROOT/tools/fnaudit-summarize.py \
+       --feature "$feature" --run "$VULPINE_RUN" \
+       --out "$VULPINE_RUN/features/$feature/audit-summary.md"
+   ```
+   Stage 7 reads this first instead of walking every audit row in-context.
+   The summary joins audit-log.db with `reachability.json` so leads are
+   ranked dynamic-observed > static-only-reachable > unclassified —
+   your three-way classification from step 2 is the authoritative input.
+
 ## Skills
 
 - `fnaudit` — schema + CLI. Authoritative.
