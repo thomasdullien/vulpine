@@ -45,12 +45,48 @@ command line the later stages should use.
    be complete — if it's missing 10% of TU's, the later stages will have 10%
    blind spots.
 
-2. Run Woboq codebrowser against the compile DB:
+2. Run Woboq codebrowser against the compile DB. This is a TWO-pass
+   process — the per-file HTML produced by `codebrowser_generator` is
+   not browsable on its own; the top-level `index.html` needs the
+   file-tree index that `codebrowser_indexgenerator` builds in a
+   second pass over the same output directory.
 
    ```bash
-   codebrowser_generator -b $VULPINE_RUN/nav/compile_commands.json \
-       -a -o $VULPINE_RUN/nav/woboq -d $VULPINE_RUN/nav/woboq-data -p <project>:$VULPINE_RUN/build/src
+   # Pass 1: emit per-file HTML + cross-reference data.
+   codebrowser_generator \
+       -b $VULPINE_RUN/nav/compile_commands.json \
+       -a \
+       -o $VULPINE_RUN/nav/woboq \
+       -d $VULPINE_RUN/nav/woboq-data \
+       -p <project>:$VULPINE_RUN/build/src
+
+   # Pass 2: build the file-tree + symbol-search index that
+   # the top-level index.html links into. SKIPPING THIS PASS leaves
+   # the HTML per-file but unbrowsable — every link from index.html
+   # returns 404.
+   codebrowser_indexgenerator \
+       $VULPINE_RUN/nav/woboq \
+       -d $VULPINE_RUN/nav/woboq-data
    ```
+
+   Verify (ALL of these — `fileIndex` alone is NOT sufficient; empirical
+   checks on prior runs show ~65% of nav/ outputs had `fileIndex` but
+   missing `index.html`, rendering the whole tree unbrowsable):
+
+   ```bash
+   test -s $VULPINE_RUN/nav/woboq/index.html || {
+     echo "pass 2 did not write index.html — re-run codebrowser_indexgenerator"
+     exit 1
+   }
+   test -s $VULPINE_RUN/nav/woboq/fileIndex
+   test -d $VULPINE_RUN/nav/woboq/<project>         # per-project subdir from pass 1
+   grep -q 'href' $VULPINE_RUN/nav/woboq/index.html # non-empty file list
+   ```
+
+   If `index.html` is missing or empty, pass 2 was either skipped or
+   run against the wrong output directory. Re-run with the exact
+   `-o <nav/woboq>` path that pass 1 used; `codebrowser_indexgenerator`
+   expects the same directory to walk.
 
    Follow the invocation the `codenav` skill documents.
 
