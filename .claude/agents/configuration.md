@@ -24,16 +24,29 @@ A single bash script: `$VULPINE_RUN/configure-target.sh`.
 
 Contract for the script:
 
-- Takes no required arguments. Exits 0 if configuration succeeds.
+- Takes an optional `--asan` flag. Without it, starts the `plain`
+  (stage-1 `build-plain/`) binaries. With it, starts the stage-1
+  `run-asan-<daemon>.sh` wrappers instead, with their stderr redirected
+  to `$VULPINE_RUN/daemon-asan.log` so stage 7 can grep it for crash
+  banners. The two modes must otherwise configure the target
+  identically (same config files, same ports, same users) — only the
+  binary path differs.
+- Exits 0 if configuration succeeds.
 - Is idempotent: running it twice leaves the container in the same state.
+  If a previous invocation left a daemon running, stop it before
+  starting the new one. Clean up `daemon-asan.log` at the start of each
+  `--asan` run so stage 7 sees only this run's output.
 - Does not download anything at run time (network may be off for analysis).
   Any required assets must live under `$VULPINE_RUN/build/` and be referenced
   from there.
 - Starts the target in the background if the target is a daemon, and writes
-  its PID to `/run/target.pid` inside the container.
+  its PID to `/run/target.pid` inside the container. Under `--asan` the
+  PID written is the ASan wrapper's PID (same tree), so killing it kills
+  the underlying binary too.
 - Writes a one-line summary of what it configured to stdout (e.g. "listening
   on tcp/8443 with self-signed cert at /etc/target/cert.pem, admin user
-  'root' password 'root', database seeded with 3 rows").
+  'root' password 'root', database seeded with 3 rows"). Under `--asan`,
+  also print the absolute path to `daemon-asan.log`.
 
 ## Approach
 

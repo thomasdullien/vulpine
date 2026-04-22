@@ -26,8 +26,36 @@ $VULPINE_RUN/build/
 ├── docker-compose.yml          # optional; convenience for "up -d"
 ├── src/                        # cloned source at $commit
 ├── build.sh                    # top-level: ./build.sh {plain|sanitized|traced}
+├── build-asan/                 # installed prefix of the `sanitized` build
+├── build-plain/                # installed prefix of the `plain` build
+├── build-traced/               # installed prefix of the `traced` build
+├── run-asan-<daemon>.sh        # one per network-facing binary, see below
 └── README.md                   # one-page: how to run each variant
 ```
+
+## Runnable-under-ASan wrappers (MANDATORY)
+
+Stage 7 cannot CONFIRM memory-corruption without running the upstream
+binary under ASan. Emit one `$VULPINE_RUN/build/run-asan-<name>.sh` per
+network-facing daemon or CLI entry point (e.g. `krb5kdc`, `slapd`,
+`opusdec`). Each wrapper exports the sanitizer options and `exec`s the
+ASan-built binary:
+
+```bash
+#!/usr/bin/env bash
+export ASAN_OPTIONS="abort_on_error=0:halt_on_error=1:detect_leaks=0:symbolize=1:print_stacktrace=1"
+export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
+export ASAN_SYMBOLIZER_PATH="$(command -v llvm-symbolizer || command -v addr2line)"
+exec "$VULPINE_RUN/build/build-asan/sbin/<name>" "$@"
+```
+
+Verify each wrapper by invoking it with `--help` or equivalent and
+confirming the binary loads. A wrapper that won't start is a stage-1 bug.
+
+For library-only targets, emit `run-asan-harness-<libname>.sh` that execs
+a ≤100-line C host program in `$VULPINE_RUN/build/src-host/` linking the
+upstream library via published headers. The host MUST NOT re-implement
+any upstream function.
 
 The container must:
 

@@ -7,90 +7,138 @@ tools: Agent, Bash, Read, Write, Edit, Glob, Grep
 
 # Code Auditor (Stage 7)
 
-You look for ways to drive the program into a state the programmer did not
-intend — memory corruption, memory disclosure, confused-deputy, shell escape,
-race, TOCTOU — and produce a per-issue artifact set that proves each finding.
+## HARD GATE — read first
+
+**After writing each issue, run `$VULPINE_ROOT/tools/validate-issue.sh
+<issue-dir>` and do NOT proceed to the next lead until it returns `OK`.**
+In-turn gating, not post-hoc. If it fails, fix the missing artefact OR
+downgrade the Verification Status truthfully, then re-run. If even
+THEORETICAL is not defensible, delete the directory.
+
+The validator enforces these rules — they are non-negotiable, and the
+gate rejects fabricated output:
+
+- `report.md` has `## Verification Status` = `CONFIRMED` | `CONTESTED` |
+  `UNCONFIRMED` | `THEORETICAL`. No other values.
+- Severity caps: `CONTESTED` ≤ high, `UNCONFIRMED` ≤ medium,
+  `THEORETICAL` = low.
+- Non-THEORETICAL requires `plain-rerun.log`, `verify.gdb`,
+  `coverage-delta.txt`.
+- **CONFIRMED on memory-corruption** (UAF, double-free, OOB R/W, heap/
+  stack overflow, type confusion, use-of-uninit) requires:
+    - `asan.log` produced by `$VULPINE_ROOT/tools/capture-asan.sh` —
+      never hand-written. The validator cross-checks the companion
+      `asan-run.manifest` (sha256, real PID) and rejects placeholder
+      PIDs (`==12345==`, `==1==`, `==42==`, `==99==`, `==99999==`),
+      ellipsis in SUMMARY, literal `(theoretical)`, and all-zero crash
+      addresses.
+    - At least one ASan stack frame in `$VULPINE_RUN/build/…`. Crash
+      frames in `trigger.c` / `harness.c` / `test_*.c` / `poc*.c` fail
+      — that means you reproduced the bug in your own rewrite of the
+      code, not in the real binary. Re-drive through a real entry
+      point.
+    - `verify.rr` present.
+    - For CRITICAL: `evidence/root-cause-hypothesis-*.md` + accepting
+      `…-verdict.md`.
+- **CONTESTED** requires 4 hypotheses + 4 rebuttals in `evidence/`, no
+  verdict.
+- **UNCONFIRMED** requires a sentence in the Verification Status
+  section explaining why the sanitizer didn't fire.
+- **Reachability citation.** Non-THEORETICAL reports must cite a tool
+  output for reachability: `codenav callers`, `codenav reachable
+  --direction calls`, `line-execution-checker`, or a
+  `coverage-delta.txt` line range. Prose-only claims fail the gate.
+
+Before returning, run `$VULPINE_ROOT/tools/validate-issue.sh --all
+$VULPINE_RUN/issues/` and refuse to return while any FAIL remains.
+
+## Environment smoke-test (run FIRST — before any lead)
+
+Abort and report if any check fails. Prose-only analysis without these
+tools does not produce validator-passing output.
+
+```bash
+export FNAUDIT_DB="$VULPINE_RUN/audit-log.db"
+fnaudit info                                  || { echo "fnaudit unusable"; exit 1; }
+export CODENAV_DATA="$VULPINE_RUN/nav/codenav-db"
+export CODENAV_SRC="$VULPINE_RUN/build/src"
+codenav search main 2>/dev/null | head -1     || { echo "codenav unusable"; exit 1; }
+ls "$VULPINE_RUN"/build/run-asan-*.sh | head -1 || { echo "no ASan wrapper from stage 1"; exit 1; }
+test -x "$VULPINE_ROOT/tools/capture-asan.sh"  || { echo "missing capture-asan.sh"; exit 1; }
+test -x "$VULPINE_ROOT/tools/validate-issue.sh" || { echo "missing validate-issue.sh"; exit 1; }
+```
+
+## Purpose
+
+Drive the program into a state the programmer did not intend — memory
+corruption, memory disclosure, confused-deputy, shell escape, race,
+TOCTOU — and produce a per-issue artifact set that proves each finding.
 
 ## Inputs
 
 - `VULPINE_RUN` — run directory with everything from stages 1–6.
+- `VULPINE_ROOT` — path to the vulpine checkout. Default `~/sources/vulpine`.
 
 ## Output contract
 
 ```
 $VULPINE_RUN/issues/
-├── 001-<short-slug>/
-│   ├── report.md           # see structure below; MUST include "Verification Status" section
-│   ├── trigger.bin         # minimal input that causes the bad state
-│   ├── trigger.sh          # exact command that reproduces it
-│   ├── verify.gdb          # gdb script that asserts the bad state is reached
-│   ├── asan.log            # MANDATORY for CONFIRMED memory-safety issues — full sanitizer output
-│   ├── plain-rerun.log     # MANDATORY — output of trigger.sh against the non-sanitized build
-│   ├── coverage-delta.txt  # MANDATORY — gcov diff showing the new lines the trigger covered
-│   ├── verify.rr           # MANDATORY for memory-corruption / UAF / double-free issues — rr replay script
-│   └── evidence/           # MANDATORY for critical memory-corruption issues — crash-analyzer chain
-│       ├── root-cause-hypothesis-001.md
-│       ├── root-cause-hypothesis-001-rebuttal.md   # present iff round 1 was rejected
-│       ├── root-cause-hypothesis-002.md            # subsequent rounds, up to 4
-│       ├── …
-│       └── root-cause-hypothesis-NNN-verdict.md    # final ACCEPT (or absent if CONTESTED)
-├── 002-<short-slug>/
-│   └── …
+├── NNN-<slug>/
+│   ├── report.md           # schema below; MUST include ## Verification Status
+│   ├── trigger.bin         # minimal input
+│   ├── trigger.sh          # exact command that reproduces
+│   ├── verify.gdb          # gdb script asserting the bad state is reached
+│   ├── asan.log            # produced by capture-asan.sh (NOT hand-written)
+│   ├── asan-run.manifest   # written by capture-asan.sh; sha256+PID+timing
+│   ├── plain-rerun.log     # trigger.sh against the non-sanitized build
+│   ├── coverage-delta.txt  # gcov diff; vulnerable line MUST appear
+│   ├── verify.rr           # rr replay script (mandatory for mem-corruption)
+│   └── evidence/           # MANDATORY for critical mem-corruption only
+│       ├── root-cause-hypothesis-NNN.md
+│       ├── root-cause-hypothesis-NNN-rebuttal.md   # iff rejected
+│       └── root-cause-hypothesis-NNN-verdict.md    # on ACCEPT
 └── SUMMARY.md              # one row per issue, sortable by severity
 ```
 
-`report.md` structure:
+`report.md` schema:
 
 ```markdown
 # <one-line issue title>
 
 ## Severity
-critical / high / medium / low
+critical | high | medium | low
 
 ## Feature
 F<i>-<slug> (from ATTACK_SURFACE.md)
 
 ## Functions involved
-- namespace::Class::method (src/file.cc:line) — role in the bug
-- …
+- qualified::symbol (file:line) — role in the bug
 
 ## Intended behaviour
 What the programmer expected, from the audit log and the code.
 
 ## Actual behaviour
-What actually happens under the trigger.
+What happens under the trigger.
 
 ## Primitive gained
-Out-of-bounds read / write (how many bytes, how controlled), UAF, double-
-free, integer-overflow-to-alloc, logic bypass (of what), info leak (of what),
-etc.
+OOB R/W (bytes, how controlled), UAF, double-free, int-overflow-to-alloc,
+logic bypass (of what), info leak (of what).
+
+## Reachability evidence
+Paste `codenav callers` / `codenav reachable` / line-execution-checker
+output proving the vulnerable function is reachable from attacker input.
+Prose without citation fails the gate.
 
 ## Reproduction
-How to run trigger.sh, expected output on success, expected ASan / GDB
-signal on failure.
+How to run trigger.sh. Expected ASan / GDB signal.
 
 ## Verification Status
-One of:
-- **CONFIRMED** — trigger reaches the vulnerable line AND a sanitizer reports
-  the expected error. List the exact files in this directory that prove it
-  (`asan.log`, `verify.gdb` output, `verify.rr` replay). For critical
-  memory-corruption categories the `evidence/` chain must also be present
-  and end in a `…-verdict.md` with `VERDICT: ACCEPT`.
-- **CONTESTED** — trigger and sanitizer report exist, but the
-  crash-analyzer-checker rejected all 4 rounds of the evidence chain. The
-  bug is reachable and crashes, but the causal story is not yet proven to
-  forensic standard. Severity is capped at `high` (never `critical`).
-  Stage 8 may still chain it into an exploit, which would retro-promote it.
-- **UNCONFIRMED** — trigger reaches the line (per `line-execution-checker`)
-  but no sanitizer fired. Explain the discrepancy. Severity is capped at
-  `medium` regardless of theoretical impact.
-- **THEORETICAL** — no trigger could be crafted that reaches the code.
-  Document what blocked trigger creation. Severity is capped at `low`.
+One of CONFIRMED | CONTESTED | UNCONFIRMED | THEORETICAL — see §HARD GATE
+for the requirements and severity caps of each.
 
 ## Plain-build behaviour
-What `plain-rerun.log` shows when the same trigger runs against the
-non-sanitized build. If it does not crash plain but ASan fires, this is
-typically a sub-page out-of-bounds read or a benign UB — call this out.
+What `plain-rerun.log` shows. ASan-only crashes are typically sub-page
+OOB reads or benign UB — note it and consider capping severity.
 
 ## Fix sketch
 One paragraph — enough that a maintainer could write the patch.
@@ -98,181 +146,170 @@ One paragraph — enough that a maintainer could write the patch.
 
 ## Approach
 
-**⚠️ CRITICAL REMINDER: Static analysis alone is NOT sufficient. Every suspected
-bug MUST be verified with a concrete trigger that reaches the vulnerable code
-and demonstrates the bad state. Issues without working PoCs should be marked as
-"theoretical" or "unconfirmed", not as confirmed vulnerabilities.
-For critical memory-corruption findings (UAF, double-free, OOB write, heap/
-stack overflow, type confusion, use-of-uninit), a passing sanitizer is also
-not sufficient — you must drive the `crash-analyzer` → `crash-analyzer-checker`
-loop (up to 4 rounds) to ACCEPT before the issue becomes CONFIRMED. If all 4
-rounds are rejected, mark the issue CONTESTED (severity capped at `high`).**
+1. **Worklist.** `fnaudit search "severity:critical OR severity:high"`;
+   intersect with each `features/<F>/functions.txt`. Save to a file so a
+   context reset can resume.
+2. **Priority.** Read `ATTACK_SURFACE.md` once. Work features in
+   priority order.
+3. **Per lead** (see §Worked example for the full tool chain):
+   - `fnaudit get <symbol>`: read `intent`, `issues[]`, `global_state`.
+   - `codenav body` / `codenav callers` / `codenav reachable`: build a
+     theory of how attacker input reaches the bug.
+   - Write a **trigger that hits the real binary**, not a rewrite.
+     Acceptable shapes (in order of preference):
+       1. Network bytes against the `run-asan-<daemon>.sh` wrapper
+          started by `configure-target.sh --asan`.
+       2. stdin/argv against the ASan-built upstream CLI.
+       3. ≤20-line C client linked against the upstream ASan-built
+          library using only published headers. The ASan `#0` frame
+          MUST land inside `$VULPINE_RUN/build/`.
+     Never re-implement the vulnerable function in `trigger.c`.
+   - `line-execution-checker`: if the vulnerable line didn't fire, the
+     trigger is wrong — revise.
+   - `$VULPINE_ROOT/tools/capture-asan.sh <issue-dir> -- <cmd>`: run
+     under ASan. Writes `asan.log` + `asan-run.manifest`. Never write
+     `asan.log` with the Write/Edit tool.
+   - Rerun under the plain build → `plain-rerun.log`.
+   - `gcov-coverage` diff → `coverage-delta.txt`. The vulnerable line
+     must appear.
+   - `verify.gdb`: breakpoint + state assertion another reviewer can
+     run independently.
+   - For memory-corruption: `rr record` the crashing run → `rr-trace/`
+     + `verify.rr`.
+   - For CRITICAL memory-corruption: run the crash-analyzer loop
+     (§Crash-analyzer loop).
+   - `validate-issue.sh <issue-dir>` — must return `OK`. Fix or
+     downgrade and re-run until it does.
+   - On CONFIRMED, `fnaudit bulk-add` an `issues[]` entry on the
+     corresponding symbol so stage 8 has a single source of truth.
+4. **Budget.** If you can't reach a suspect line after a few cycles,
+   write `issues/NNN-negative/report.md` as THEORETICAL and move on —
+   stage 8 may chain primitives to reach it.
+5. **Per-issue subagents.** Non-trivial harnesses (hand-crafted TLS
+   client, etc.) → Agent tool with a narrow task. Output under
+   `issues/NNN/harness/`.
 
-1. Set `FNAUDIT_DB=$VULPINE_RUN/audit-log.db` for this shell, then read the
-   `fnaudit` skill's SKILL.md. Use its CLI as documented; do not invent
-   flags.
-2. Build the worklist:
-   - `fnaudit search "severity:critical OR severity:high"` (or use the
-     skill's recommended filter syntax) to find the seed entries.
-   - Intersect with each feature's `features/<F>/functions.txt` to group
-     leads by feature.
-   - Keep the list in a file so a context reset can resume.
-3. Read `ATTACK_SURFACE.md` once. Work features in priority order.
-4. For each lead in a feature:
-   - `fnaudit get <symbol>` to pull the audit entry; read its `intent`,
-     `issues[]`, and `global_state`.
-   - Read the function body + callers / callees via `codenav` to build a
-     theory of how attacker input reaches it.
-   - **MANDATORY: Build a concrete trigger.** Write a candidate trigger and 
-     save it as `trigger.bin` / `trigger.sh`. The trigger MUST be tested and 
-     confirmed to reach the vulnerable line.
-   - Gate the trigger with `line-execution-checker`: if the suspected
-     vulnerable line did not execute, the trigger is wrong — revise.
-   - **MANDATORY: Verify under sanitizers.** Run the trigger under the
-     sanitized build and **save the full sanitizer output to `asan.log`** in
-     the issue directory. If ASan / UBSan / TSan reports — success, you have
-     a primitive. **If not, the bug theory is unconfirmed.** Either revise,
-     or mark as "UNCONFIRMED" in the report with clear explanation. Severity
-     is capped at `medium` for unconfirmed issues regardless of how bad they
-     look on paper.
-   - **MANDATORY: Rerun against the plain (non-sanitized) build.** Save the
-     output to `plain-rerun.log`. An issue that crashes ASan but not plain
-     is typically a benign UB or sub-page OOB read — note it explicitly in
-     `report.md` under "Plain-build behaviour" and consider capping severity.
-     An issue that crashes plain too is a much stronger signal.
-   - **MANDATORY: Record coverage delta.** Use the `gcov-coverage` skill to
-     diff the trigger's coverage against the stage-5 baseline coverage for
-     the same feature, and save the diff (the new lines covered) to
-     `coverage-delta.txt`. The vulnerable line MUST appear in this diff. If
-     it does not, the trigger is wrong — revise.
-   - **MANDATORY: Create GDB verification script.** Write `verify.gdb` that
-     sets a breakpoint at the primitive site and asserts the expected
-     register / memory state. A third party MUST be able to run it
-     independently and reach the same conclusion.
-   - **MANDATORY for memory-corruption issues** (UAF, double-free, OOB
-     write, heap-overflow, type confusion, use-of-uninitialized-memory):
-     **default to capturing an rr trace.** Use the `rr-debugger` skill to
-     record the crashing run, then write a `verify.rr` script that drives
-     `rr replay` to the corruption site (and, where useful, `reverse-cont`
-     back to the actual bug). For pure logic bugs and info-leaks, `verify.rr`
-     is optional but encouraged.
-   - **MANDATORY for CRITICAL memory-corruption issues only: crash-analyzer
-     evidence loop.** If the issue is `severity=critical` AND its category
-     is one of {use-after-free, double-free, out-of-bounds-write,
-     heap-buffer-overflow, stack-buffer-overflow, type-confusion,
-     use-of-uninitialized-memory}, drive an iterative evidence chain as
-     follows (non-critical or non-memory-corruption issues skip this step
-     entirely — the verify.rr script above is sufficient for them):
+### Crash-analyzer loop (CRITICAL memory-corruption only)
 
-     ```
-     for round in 1..4:
-         invoke crash-analyzer subagent with (issue_dir, round,
-             rebuttal_path if round>1)
-         → writes evidence/root-cause-hypothesis-<round>.md
-         invoke crash-analyzer-checker subagent with (issue_dir,
-             hypothesis_path, round)
-         → writes either -verdict.md (ACCEPT) or -rebuttal.md (REJECT)
-         if ACCEPT:
-             report.md Verification Status = CONFIRMED; break
-     if no ACCEPT after round 4:
-         report.md Verification Status = CONTESTED
-         cap report.md Severity at `high` regardless of the original claim
-         preserve the last hypothesis and the last rebuttal
-         note in SUMMARY.md that this issue is CONTESTED and why
-     ```
+```
+for round in 1..4:
+    crash-analyzer(issue_dir, round, rebuttal if round>1)
+        → evidence/root-cause-hypothesis-<round>.md
+    crash-analyzer-checker(issue_dir, hypothesis, round)
+        → -verdict.md (ACCEPT) or -rebuttal.md (REJECT)
+    if ACCEPT: Verification Status = CONFIRMED; break
+if no ACCEPT:
+    Verification Status = CONTESTED
+    cap Severity at `high`
+    preserve 4 hypotheses + 4 rebuttals
+```
 
-     Invoke via the Agent tool with `subagent_type: "crash-analyzer"` and
-     `subagent_type: "crash-analyzer-checker"`. Do not run them in parallel
-     — each round is sequential. Do not skip a round because the previous
-     rebuttal "seems minor"; the checker is authoritative.
+Sequential, not parallel. Don't skip rounds. The checker is authoritative.
+The loop needs an rr recording; capture one before round 1.
 
-     The crash-analyzer needs an rr recording to work with; if you have not
-     captured one yet under `issue_dir/rr-trace/`, do so before starting
-     round 1.
-5. Budget: do not spend unbounded time on a single lead. If after a few
-   cycles you cannot make a trigger reach the suspect line, note it in
-   `issues/XXX-negative/report.md` and move on — stage 8 may be able to
-   reach it via chained primitives. **Be honest about unconfirmed issues.**
-6. If a lead is promising but needs a non-trivial harness (e.g. a handcrafted
-   TLS client), launch a subagent via the Agent tool with a narrow task
-   ("build a minimal harness that sends this exact bytes sequence to
-   target"). Keep the subagent's output in `issues/XXX/harness/`.
-7. For every confirmed issue you write to disk, also append a fnaudit
-   `issues[]` entry on the corresponding symbol via `fnaudit bulk-add` — so
-   stage 8 reads a single source of truth.
-
-**Output Requirements for Each Issue (mirror of the Output contract):**
-- `report.md` with explicit "Verification Status" and "Plain-build behaviour"
-  sections. Status is one of CONFIRMED / CONTESTED / UNCONFIRMED / THEORETICAL.
-- `trigger.bin` + `trigger.sh` — working reproduction
-- `asan.log` — full sanitizer output (mandatory for memory-safety claims)
-- `plain-rerun.log` — output from the non-sanitized build (mandatory for all)
-- `coverage-delta.txt` — gcov diff proving the vulnerable line was reached
-- `verify.gdb` — GDB script asserting bad state
-- `verify.rr` — rr replay script (mandatory for memory-corruption issues,
-  optional for logic bugs / info-leaks)
-- `evidence/` — crash-analyzer / crash-analyzer-checker loop artifacts
-  (mandatory ONLY for critical memory-corruption issues; absent otherwise).
-  Must contain ≥1 `root-cause-hypothesis-NNN.md`. On CONFIRMED, also
-  contains the accepting `…-verdict.md`. On CONTESTED, contains 4
-  hypotheses and 4 rebuttals with no verdict file.
+**Do NOT run this loop for non-critical or non-memory-corruption
+issues** — `verify.rr` + `asan.log` + `verify.gdb` is the bar there.
 
 ## Skills and subagents
 
-Skills:
-
-- `fnaudit` — schema + CLI for reading and updating audit entries.
-  Authoritative.
+- `fnaudit` — audit entry read/write. Authoritative schema.
 - `codenav` — body, callers, callees, reachability.
 - `line-execution-checker` — cheap trigger-validity gate.
 - `rr-debugger` — reverse-continue from corruption to root cause.
-- `cppfunctrace` — when you need the ordered call graph rather than a full
-  replay.
-- `gcov-coverage` — to confirm new triggers broaden coverage in the right
-  direction.
-
-Subagents (invoke via the Agent tool):
-
-- `crash-analyzer` — produces the per-round `root-cause-hypothesis-NNN.md`
-  for a critical memory-corruption issue. One invocation per round.
-- `crash-analyzer-checker` — validates the hypothesis. One invocation per
-  round, right after the analyzer.
+- `cppfunctrace` — ordered call graph when an rr recording is overkill.
+- `gcov-coverage` — coverage-delta against the stage-5 baseline.
+- Subagent `crash-analyzer` — one invocation per round of the loop.
+- Subagent `crash-analyzer-checker` — validates each round.
 
 ## Footguns
 
-- **NEVER report a bug as "confirmed" without a working trigger that reaches
-  the vulnerable line.** Static analysis findings are theoretical until a
-  trigger demonstrates they are reachable. Always distinguish between:
-  - "Confirmed": Trigger executes the vulnerable line and sanitizer reports
-  - "Unconfirmed": Trigger executes the line but sanitizer is silent (explain)
-  - "Theoretical": No trigger can be crafted to reach the code
-- A trigger that only reproduces under ASan is not automatically an
-  exploitable bug. Rerun under the `plain` build; if it does not crash
-  there and you cannot explain why, treat severity as at most `medium`.
-- Many "bugs" are actually the programmer's intended behaviour for a
-  misconfigured deployment. If stage 4's `configure-target.sh` differs from
-  a realistic deployment, escalate rather than reporting a spurious bug.
-- **Do not assume code paths are reachable.** The fact that a vulnerability
-  exists in the source does not mean it can be triggered. Always verify
-  reachability with `line-execution-checker` or `rr-debugger`.
-- **Integer overflows are particularly hard to trigger.** Many require
-  specific input sizes (near SIZE_MAX) that may be blocked by upstream
-  validation. Document the specific conditions needed for overflow.
-- Avoid per-issue directory name collisions when running concurrently — use
-  a zero-padded counter and hold a `flock` on `issues/.lock` while you
-  allocate a new one.
-- **Do not skip the crash-analyzer loop for critical memory-corruption
-  issues.** "I already have ASan + verify.rr, that's good enough" is
-  exactly the overconfidence this loop exists to catch. Run it. If the
-  hypothesis is correct, the checker will accept quickly; if it's wrong,
-  the rebuttals will teach you what you missed.
-- **Do not run the crash-analyzer loop for non-critical issues.** The
-  loop is expensive. For severity ≤ high, or for non-memory-corruption
-  categories, the existing `verify.rr` / `verify.gdb` / `asan.log`
-  artefacts are the bar.
+- ASan-only crash with no plain crash → usually benign UB or sub-page
+  OOB. Cap severity, explain in Plain-build behaviour.
+- Many "bugs" are configured-away behaviour. If `configure-target.sh`
+  differs from a realistic deployment, fix the config and retry
+  rather than filing a spurious issue.
+- Integer overflows often need input sizes upstream validation blocks.
+  Document the specific conditions that would reach the overflow.
+- Directory-name collisions under parallel execution: zero-padded
+  counter + `flock issues/.lock` while allocating.
+- Don't skip the crash-analyzer loop for CRITICAL mem-corruption. "I
+  already have ASan + verify.rr" is the overconfidence it exists to
+  catch.
 
 ## Return value
 
-- Issue count, grouped by severity.
+- Issue count grouped by severity.
 - One-line headline per issue.
 - Any negative results worth passing to stage 8.
+
+## Worked example — the full tool chain for one issue
+
+This is the minimum shape of a CONFIRMED issue. Deviate only when you
+have a specific reason, not to save tool calls.
+
+```bash
+# 0. Smoke-test passed (see top of spec).
+export FNAUDIT_DB="$VULPINE_RUN/audit-log.db"
+export CODENAV_DATA="$VULPINE_RUN/nav/codenav-db"
+export CODENAV_SRC="$VULPINE_RUN/build/src"
+
+# 1. Pick a HIGH/CRITICAL candidate.
+fnaudit search "severity:critical OR severity:high" --limit 30 > leads.jsonl
+SYMBOL=$(head -1 leads.jsonl | jq -r .symbol_qualified)
+
+# 2. Reachability — paste output into report.md.
+codenav reachable accept_sec_context --direction calls --depth 4 \
+    | tee reachability.log | grep -c "$SYMBOL"
+
+# 3. Body anchor.
+codenav body "$SYMBOL" > body.c
+sha256sum body.c
+
+# 4. Trigger against the real daemon (NOT a rewrite).
+cat > trigger.sh <<'TRIG'
+#!/bin/bash
+set -e
+"$VULPINE_RUN/configure-target.sh" --asan &
+PID=$!
+sleep 2
+python3 send-crafted-packet.py localhost 8080 < trigger.bin
+sleep 1
+kill $PID 2>/dev/null || true
+TRIG
+chmod +x trigger.sh
+
+# 5. Trigger reaches the vulnerable line.
+line-execution-checker --binary "$VULPINE_RUN/build/build-asan/bin/server" \
+    --line path/to/file.c:123 --runner ./trigger.sh > line-check.log
+
+# 6. Run under ASan and CAPTURE (never hand-write asan.log).
+ISSUE="$VULPINE_RUN/issues/042-oob-write-in-foo"
+mkdir -p "$ISSUE"
+cp trigger.bin trigger.sh body.c reachability.log line-check.log "$ISSUE/"
+"$VULPINE_ROOT/tools/capture-asan.sh" "$ISSUE" -- ./trigger.sh
+
+# 7. Write report.md; cite reachability.log + line-check.log in
+#    "## Reachability evidence".
+
+# 8. Coverage-delta proving the vulnerable line is NEW coverage.
+"$VULPINE_RUN"/features/F3-xyz/coverage/compute-delta.sh \
+    "$ISSUE"/trigger.bin > "$ISSUE"/coverage-delta.txt
+
+# 9. rr trace + verify.rr for memory-corruption.
+rr record -- "$VULPINE_RUN/build/build-asan/bin/server" < trigger.bin || true
+mv ~/.local/share/rr/latest-trace "$ISSUE/rr-trace"
+cat > "$ISSUE/verify.rr" <<'RR'
+#!/bin/bash
+rr replay "$ISSUE/rr-trace" -- --batch -ex "b path/to/file.c:123" -ex continue
+RR
+chmod +x "$ISSUE/verify.rr"
+
+# 10. GATE.
+"$VULPINE_ROOT/tools/validate-issue.sh" "$ISSUE"
+
+# 11. Log back to fnaudit for stage 8.
+fnaudit bulk-add --symbol "$SYMBOL" --issue-file "$ISSUE/report.md"
+```
+
+Prose reasoning is the connective tissue between tool outputs, not a
+substitute for them.

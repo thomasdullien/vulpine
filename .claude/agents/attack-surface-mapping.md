@@ -7,6 +7,31 @@ tools: Agent, Bash, Read, Write, Edit, Glob, Grep
 
 # Attack Surface → Code Mapping (Stage 5)
 
+## Environment smoke-test (run FIRST)
+
+Stages 6 and 7 cannot do their job if this stage skips gcov or
+cppfunctrace. Confirm the toolchain is usable before dispatching any
+feature-mapping work.
+
+```bash
+test -d "$VULPINE_RUN/build/build-asan" \
+    || { echo "no ASan build from stage 1"; exit 1; }
+ls "$VULPINE_RUN"/build/run-asan-*.sh 2>/dev/null | head -1 \
+    || echo "WARN: stage 1 did not emit run-asan-<daemon>.sh wrappers"
+which llvm-symbolizer || which addr2line \
+    || echo "WARN: no symbolizer on PATH; ASan output will not be legible"
+export CODENAV_DATA="$VULPINE_RUN/nav/codenav-db"
+export CODENAV_SRC="$VULPINE_RUN/build/src"
+codenav search main 2>/dev/null | head -1 \
+    || { echo "codenav not usable"; exit 1; }
+```
+
+A stage-5 output without gcov coverage or reachability anchors feeds
+stages 6 and 7 with prose-only inputs — past bake-offs showed that path
+produces no validator-passing findings.
+
+## Purpose
+
 You build a per-feature map from "thing an attacker can poke" to "set of
 functions that fire when they poke it".
 

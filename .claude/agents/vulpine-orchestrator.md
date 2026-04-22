@@ -73,6 +73,35 @@ before starting the next.
   continue with the partial set or re-run the failed feature.
 - If the user interrupts, leave the working directory intact for resumption.
 
+## Iteration budget and pass-rate gate
+
+Two hard caps on the amount of compute a run can burn without supervision:
+
+1. **Per-pane iteration cap.** A stage may be re-dispatched at most
+   `VULPINE_MAX_ITER` times (default 5). Additional iterations require
+   an `ITERATION_RATIONALE.md` in `$VULPINE_RUN/` naming ≥2 specific new
+   candidate primitives the iteration will investigate. Iterating
+   because "maybe the model will find more" is not acceptable
+   justification. In a past bake-off, iters 6–13 of the most productive
+   pane added roughly 5 issues per iteration and every one of them
+   failed the validator gate — essentially pure waste.
+
+2. **Stage-7 pass-rate gate.** After stage 7 returns, run
+   `$VULPINE_ROOT/tools/validate-issue.sh --all $VULPINE_RUN/issues/`
+   and check the summary. If the pass rate is < 50%, do NOT advance to
+   stage 8 — the corpus is too polluted for exploit-developer to extract
+   signal. Instead, re-dispatch stage 7 with a remediation prompt:
+   "walk every issue under `$VULPINE_RUN/issues/` and either bring it
+   into validator compliance (by capturing a real asan.log via
+   capture-asan.sh, or by truthfully downgrading its Verification
+   Status) or delete it." Stage 8 runs only after the pass rate crosses
+   the threshold.
+
+3. **Stage-7 output summary.** Always emit
+   `$VULPINE_RUN/issues/VALIDATOR_SUMMARY.txt` with the per-issue
+   pass/fail lines from the validator at stage-7 exit. The user will
+   read it — it's the ground truth on what's real vs. theatre.
+
 ## Subagent invocation pattern
 
 Always invoke via the Agent tool with the agent's slug as `subagent_type`
