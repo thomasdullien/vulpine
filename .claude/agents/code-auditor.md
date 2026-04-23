@@ -45,9 +45,24 @@ gate rejects fabricated output:
 - **UNCONFIRMED** requires a sentence in the Verification Status
   section explaining why the sanitizer didn't fire.
 - **Reachability citation.** Non-THEORETICAL reports must cite a tool
-  output for reachability: `codenav callers`, `codenav reachable
-  --direction calls`, `line-execution-checker`, or a
-  `coverage-delta.txt` line range. Prose-only claims fail the gate.
+  output for reachability. For `Evidence layer: application` this
+  citation MUST reference a real cppfunctrace capture — either
+  `features/<F>/trace.ftrc` (the stage-5 capture) or a
+  `features/<F>/trace.ftrc.ext-<sym>` (a fuzzer-extension capture) in
+  which the vulnerable function was observed firing. For
+  `Evidence layer: library` (or THEORETICAL with reachability still
+  claimed) `codenav callers` / `codenav reachable` /
+  `line-execution-checker` / `coverage-delta.txt` is acceptable.
+  Prose-only claims fail the gate in both cases.
+- **Taint chain.** Every `Evidence layer: application` finding must
+  ship a `taint-chain.md` produced under `rr` that walks backward from
+  the vulnerable site's suspect parameter to its ultimate source.
+  The chain's final-row `Classification` MUST be `attacker-controlled`
+  — meaning the value derives from a `read()` / `recv()` / `fread()` /
+  equivalent I/O return. Classifications `constant`, `sentinel`,
+  `clamped`, `harness-forged` downgrade the finding to THEORETICAL
+  (the bug exists only under initial conditions no real caller
+  produces). See §Taint-chain workflow below.
 
 Before returning, run `$VULPINE_ROOT/tools/validate-issue.sh --all
 $VULPINE_RUN/issues/` and refuse to return while any FAIL remains.
@@ -125,9 +140,19 @@ OOB R/W (bytes, how controlled), UAF, double-free, int-overflow-to-alloc,
 logic bypass (of what), info leak (of what).
 
 ## Reachability evidence
-Paste `codenav callers` / `codenav reachable` / line-execution-checker
-output proving the vulnerable function is reachable from attacker input.
-Prose without citation fails the gate.
+For `Evidence layer: application`, cite the `features/<F>/trace.ftrc`
+(or `trace.ftrc.ext-<sym>`) path in which the vulnerable function
+fired, and paste the `trace_processor_shell` query output showing a
+non-zero count. For `Evidence layer: library` or THEORETICAL with a
+reachability claim, `codenav callers` / `codenav reachable` /
+`line-execution-checker` / `coverage-delta.txt` is acceptable.
+Prose-only claims fail the gate.
+
+## Taint chain
+For `Evidence layer: application` only. Point at `taint-chain.md` and
+state its final-row `Classification`. If the classification is not
+`attacker-controlled`, the Verification Status must drop to
+THEORETICAL.
 
 ## Reproduction
 How to run trigger.sh. Expected ASan / GDB signal.
@@ -268,6 +293,88 @@ One paragraph — enough that a maintainer could write the patch.
 6. **Per-issue subagents.** Non-trivial harnesses (hand-crafted TLS
    client, etc.) → Agent tool with a narrow task. Output under
    `issues/NNN/harness/`.
+
+### Taint-chain workflow (MANDATORY for Evidence layer: application)
+
+Every finding claiming `Evidence layer: application` must ship a
+`taint-chain.md` that proves the suspect parameter's value actually
+derives from attacker bytes — not from a constant, a clamped integer,
+a sentinel, or a forged initial condition in a harness. This replaces
+prose-level "attacker-controlled" claims with a replayable rr trace.
+
+Workflow:
+
+1. Start from the existing `rr-trace/` (you already recorded the
+   crashing run — the verify.rr script replays it).
+2. Identify the suspect parameter / memory location at the vulnerable
+   site. Typically the single value whose out-of-range content caused
+   the crash (an index, a length, a pointer, a stride).
+3. Drive `rr replay` to the crash site, then walk backward:
+   ```
+   b <file>:<crash-line>
+   continue
+   # examine the suspect value
+   print <expr>
+   # watchpoint on its storage; reverse-continue to the last write
+   watch -l *(<type>*)<addr>
+   reverse-continue
+   # at each write, record: pc, source line, expression being stored,
+   # from which register/memory it came. Then walk further back.
+   ```
+4. Continue backward until the write is one of:
+   - A return from `read` / `recv` / `recvmsg` / `recvfrom` / `pread`
+     / `readv` / `fread` / `SSL_read` / `getline` or equivalent I/O
+     syscall — **classification: attacker-controlled**.
+   - A copy from a buffer that was in turn filled by one of the above
+     — still `attacker-controlled`.
+   - A literal immediate (`mov $imm, …`), a `sizeof(...)`, an enum
+     constant, or a `#define` — **classification: constant**.
+   - A value that passed through `min(…, SMALL_LIMIT)`, a bounds
+     check, or a validation function that forces it into a safe
+     range before the suspect site — **classification: clamped**.
+   - A sentinel set by an init function (e.g. `ctx->state = READY`)
+     independently of input — **classification: sentinel**.
+   - A value written by your own harness / trigger program, not by
+     the upstream daemon — **classification: harness-forged**. This
+     means the bug is only reachable when the harness forces initial
+     conditions no real caller produces; downgrade to THEORETICAL.
+
+5. Produce `taint-chain.md` with this schema:
+
+   ```markdown
+   # Taint chain for <qualified::symbol> @ <file>:<line>
+
+   ## Vulnerable site
+   <symbol>, parameter `<name>`, type `<type>`, role in the bug.
+
+   ## Trigger (real entry point)
+   <one-line description of how attacker bytes entered: e.g.
+   `echo -ne "\\x30..." | nc localhost 389`>
+
+   ## rr recording
+   `<path to rr-trace>` — replay with `verify.rr`.
+
+   ## Chain (newest → oldest)
+
+   | step | pc / rip | source location | write instruction | value origin | classification |
+   |------|----------|------------------|--------------------|---------------|----------------|
+   | 1 | 0x… | file.c:L | parameter passed | caller frame | propagated |
+   | 2 | 0x… | file.c:L | `*p = n`          | local var     | propagated |
+   | … |     |                   |                  |               |             |
+   | N | 0x… | netio.c:L | `rv = recv(…)`   | syscall ret  | attacker-controlled |
+
+   ## Classification: attacker-controlled
+   ```
+
+   The final line `## Classification: <verdict>` is what the validator
+   keys on. `attacker-controlled` is the only value that permits
+   `Evidence layer: application`.
+
+6. If the chain terminates in `harness-forged`, `constant`,
+   `sentinel`, or `clamped`: do NOT file the issue as
+   application-layer. Either downgrade to THEORETICAL with an
+   explanation of what upstream change would flip the classification,
+   or delete the directory and move on.
 
 ### Crash-analyzer loop (CRITICAL memory-corruption only)
 

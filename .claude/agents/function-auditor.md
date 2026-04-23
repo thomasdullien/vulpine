@@ -42,6 +42,10 @@ Every fnaudit entry must be anchored to actual tool output, not prose:
   `codenav body` returns nothing, SKIP the function to `skipped.txt`
   with reason `symbol unresolved` — do NOT write a prose-only audit.
 - `callers_count` — `codenav callers <symbol> | wc -l`.
+- `reach_evidence` — the path of the `trace.ftrc` (or
+  `trace.ftrc.ext-<sym>`) in which this symbol was observed firing.
+  Required for every entry; absent entries are rejected by the stage-7
+  worklist.
 - Every `issues[].site` cites a specific line range from `codenav body`
   output (e.g. `"lines 47-52 of body_sha=abc..."`) or a named
   precondition / postcondition.
@@ -72,24 +76,92 @@ Read the `fnaudit` skill's SKILL.md before writing entries. Schema fields:
 1. **Dedup**: `cat $functions_file | fnaudit get --batch > existing.jsonl`;
    filter out symbols already audited at the current `source_commit`.
 
-2. **Empirical reachability classification** (MANDATORY). For each
-   candidate, decide:
-   - **observed** — appears in `features/$feature/trace.ftrc`. Audit
-     normally.
-   - **unobserved-but-reachable** — not in trace, but `codenav reachable
-     --from <entry>` says reachable. Audit, but set
-     `verification_blocked_by: "not observed in stage-5 trace; reachable
-     statically but the fuzzer does not exercise it"` and **cap severity
-     at `medium`**.
-   - **unreachable** — codenav says unreachable. Log to `skipped.txt`
-     and skip; it's noise from the coverage diff.
+2. **Tiered reachability ranking** (MANDATORY). Prioritise by dynamic
+   evidence, not by prose-plausibility. For each candidate, assign a
+   tier:
+
+   - **Tier A (observed)** — the symbol appears in the stage-5
+     `features/$feature/trace.ftrc`, i.e. it actually fired when the
+     real daemon/CLI processed the feature's seed corpus. Confirm with:
+     ```bash
+     trace_processor_shell -q \
+       "select count(*) from slice where name='$SYM'" \
+       features/$feature/trace.perfetto-trace
+     ```
+     If the count is ≥ 1, the symbol is Tier A. These are first-class
+     audit targets.
+   - **Tier B (statically reachable, dynamically unobserved)** — not
+     in the trace, but `codenav reachable --from <Tier-A-ancestor>`
+     shows any static path to this symbol (path length ≤ 5 is
+     preferred; longer paths are fine but lower priority). Do NOT
+     audit Tier B symbols until you have converted them to Tier A via
+     the fuzzer-extension workflow in step 2-bis. A static edge is
+     necessary but not sufficient — the callgraph can't tell you which
+     state-dependent path a concrete run actually takes, so we require
+     dynamic proof.
+   - **Tier C (unreachable)** — no static path from any Tier-A
+     ancestor. Log to `skipped.txt` with reason `not reachable from
+     traced entry points` and skip. These are coverage-diff noise.
+
+   The audit budget (10 rows / feature) is spent Tier A first. Only
+   move to Tier B if Tier A has fewer than 10 entries with plausible
+   issues.
 
    Persist to `features/$feature/reachability.json`:
    ```json
-   {"observed": [...], "unobserved_reachable": [...], "unreachable_skipped": [...]}
+   {
+     "tier_a_observed":          [...],
+     "tier_b_reachable_pending": [...],
+     "tier_b_reachable_promoted": [
+       {"symbol": "...", "promoted_by": "trace.ftrc.ext-<sym>"}
+     ],
+     "tier_c_unreachable":       [...]
+   }
    ```
 
-3. **Audit each observed / unobserved-but-reachable symbol.** `intent`
+2-bis. **Fuzzer extension for Tier B (pay-to-play).** Before auditing
+   a Tier-B symbol `G` you must prove dynamic reachability by
+   extending the stage-5 fuzzer until `G` actually fires. Do NOT write
+   a standalone harness that calls `G` directly — that is the failure
+   mode this gate exists to eliminate.
+
+   Workflow:
+
+   1. Read `features/$feature/fuzz.sh` and `features/$feature/seeds/`.
+   2. Walk `codenav reachable --from <Tier-A-ancestor> --to $G` to
+      find the shortest static path. Read each intermediate function's
+      body to identify the input condition (byte value, length field,
+      config flag, protocol opcode) that selects the branch toward
+      `G`.
+   3. Produce a minimal extension to `fuzz.sh` / seeds — a new seed
+      byte pattern, a new CLI flag, an additional protocol request —
+      that the static analysis predicts will reach `G`. Keep the
+      extension small; one branch condition at a time.
+   4. Re-run the extended `fuzz.sh` against the real daemon under
+      cppfunctrace (the same `configure-target.sh --traced` path
+      stage 5 used). Capture the new trace as
+      `features/$feature/trace.ftrc.ext-$G` (and the perfetto form).
+   5. Query the new trace for `$G`. If count ≥ 1: promote to Tier A,
+      record the promotion in `reachability.json` with
+      `promoted_by: trace.ftrc.ext-$G`, commit the extended `fuzz.sh`
+      diff to `features/$feature/fuzz.sh.ext-$G.patch`, and audit
+      normally. The `fnaudit` entry MUST set
+      `reach_evidence = "trace.ftrc.ext-$G"` so stage 7 can cite it.
+   6. If after two extension attempts `$G` still does not fire:
+      demote to Tier C, note `"reach_attempts": 2, "reason": "fuzzer
+      extension did not reach; suspected path-sensitive guard"` in
+      `reachability.json`, and move on. Do NOT hand-write a harness
+      around `$G`; do NOT author an audit entry claiming severity
+      based on static reachability alone.
+
+   Rationale: a function that is statically reachable but resists
+   reasonable fuzzer extension is almost always gated by an input
+   validation check the agent did not model, and findings on such
+   functions tend to be "crashes when called with parameters no real
+   caller produces" — the exact class of false positive we are
+   trying to eliminate.
+
+3. **Audit each Tier-A symbol (including Tier-B promotions).** `intent`
    = what the programmer wants (from name, comments, call sites). Look
    for discrepancies with the intent:
    - Integer overflow / sign mismatch / integer promotion flipping signs.
