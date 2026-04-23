@@ -267,8 +267,8 @@ validate_one() {
   # everything else, the report must cite at least one tool-output as
   # evidence of reachability; prose-only reachability claims fail the gate.
   if [ "$status" != "THEORETICAL" ]; then
-    grep -iqE 'codenav (callers|reachable|body)|line-execution-checker|coverage-delta\.txt|reachability\.log|gcov output|trace\.ftrc|trace\.perfetto-trace' "$report" \
-      || { fail "$dir" "report.md lacks a reachability-evidence citation (expected mention of 'codenav callers/reachable/body', 'line-execution-checker', 'coverage-delta.txt', or a 'features/<F>/trace.ftrc(.ext-<sym>)' trace file). Prose-only reachability claims are insufficient."; return 1; }
+    grep -iqE 'codenav (callers|reachable|body)|line-execution-checker|coverage-delta\.txt|reachability\.log|gcov output|coverage\.json|coverage\.ext-|trace\.ftrc|trace\.perfetto-trace' "$report" \
+      || { fail "$dir" "report.md lacks a reachability-evidence citation (expected mention of 'codenav callers/reachable/body', 'line-execution-checker', 'coverage-delta.txt', 'features/<F>/coverage.json', or 'features/<F>/trace.ftrc'). Prose-only reachability claims are insufficient."; return 1; }
   fi
 
   # ---- Evidence layer: application — require REAL trace citation +
@@ -282,10 +282,13 @@ validate_one() {
   # enough — the suspect value must be traced back to an attacker byte
   # via rr.
   if [ "$ev_layer" = "application" ] && [ "$status" != "THEORETICAL" ]; then
-    # The reachability citation must name a real trace file (stage-5 or
-    # fuzzer-extension), not just a codenav call-graph path.
-    grep -qE 'features/[^ ]+/trace\.ftrc(\.ext-[^ ]+)?|features/[^ ]+/trace\.perfetto-trace' "$report" \
-      || { fail "$dir" "Evidence layer=application requires the reachability section to cite a real cppfunctrace capture ('features/<F>/trace.ftrc' or 'features/<F>/trace.ftrc.ext-<sym>') proving the vulnerable function fired under a real daemon/CLI run. A codenav-only citation is insufficient here."; return 1; }
+    # The reachability citation must name a real dynamic-firing source
+    # (stage-5 coverage or cppfunctrace, or a stage-6 fuzzer-extension
+    # re-capture), not just a codenav call-graph path. coverage.json is
+    # the primary "did it fire?" source; trace.ftrc/perfetto is richer
+    # context for the taint-chain but equivalent for reachability.
+    grep -qE 'features/[^ ]+/(coverage\.json|coverage\.ext-[^ ]+\.json|trace\.ftrc(\.ext-[^ ]+)?|trace\.perfetto-trace)' "$report" \
+      || { fail "$dir" "Evidence layer=application requires the reachability section to cite a real dynamic-firing record ('features/<F>/coverage.json', 'features/<F>/coverage.ext-<sym>.json', 'features/<F>/trace.ftrc', or 'features/<F>/trace.perfetto-trace') proving the vulnerable function fired under a real daemon/CLI run. A codenav-only citation is insufficient here."; return 1; }
 
     local tc="$dir/taint-chain.md"
     [ -f "$tc" ] && [ -s "$tc" ] \

@@ -67,14 +67,15 @@ gate rejects fabricated output:
   section explaining why the sanitizer didn't fire.
 - **Reachability citation.** Non-THEORETICAL reports must cite a tool
   output for reachability. For `Evidence layer: application` this
-  citation MUST reference a real cppfunctrace capture — either
-  `features/<F>/trace.ftrc` (the stage-5 capture) or a
-  `features/<F>/trace.ftrc.ext-<sym>` (a fuzzer-extension capture) in
-  which the vulnerable function was observed firing. For
-  `Evidence layer: library` (or THEORETICAL with reachability still
-  claimed) `codenav callers` / `codenav reachable` /
-  `line-execution-checker` / `coverage-delta.txt` is acceptable.
-  Prose-only claims fail the gate in both cases.
+  citation MUST reference a real dynamic-firing record — either
+  `features/<F>/coverage.json` (gcov, preferred), a stage-6 fuzzer-
+  extension capture at `features/<F>/coverage.ext-<sym>.json`, or a
+  `features/<F>/trace.ftrc` / `trace.perfetto-trace` — in which the
+  vulnerable function was observed firing under a real daemon / CLI
+  run. For `Evidence layer: library` or THEORETICAL,
+  `codenav callers` / `codenav reachable` / `line-execution-checker`
+  / `coverage-delta.txt` is acceptable. Prose-only claims fail the
+  gate in both cases.
 - **Taint chain.** Every `Evidence layer: application` finding must
   ship a `taint-chain.md` produced under `rr` that walks backward from
   the vulnerable site's suspect parameter to its ultimate source.
@@ -161,13 +162,14 @@ OOB R/W (bytes, how controlled), UAF, double-free, int-overflow-to-alloc,
 logic bypass (of what), info leak (of what).
 
 ## Reachability evidence
-For `Evidence layer: application`, cite the `features/<F>/trace.ftrc`
-(or `trace.ftrc.ext-<sym>`) path in which the vulnerable function
-fired, and paste the `trace_processor_shell` query output showing a
-non-zero count. For `Evidence layer: library` or THEORETICAL with a
-reachability claim, `codenav callers` / `codenav reachable` /
-`line-execution-checker` / `coverage-delta.txt` is acceptable.
-Prose-only claims fail the gate.
+For `Evidence layer: application`, cite
+`features/<F>/coverage.json` (or `coverage.ext-<sym>.json`) and paste
+the grep output showing the vulnerable symbol in the coverage set.
+If you need call-order context (e.g. for the taint chain), also cite
+`features/<F>/trace.ftrc` or `trace.perfetto-trace`. For
+`Evidence layer: library` or THEORETICAL, `codenav callers` /
+`codenav reachable` / `line-execution-checker` / `coverage-delta.txt`
+is acceptable. Prose-only claims fail the gate.
 
 ## Taint chain
 For `Evidence layer: application` only. Point at `taint-chain.md` and

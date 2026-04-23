@@ -20,10 +20,10 @@ export CODENAV_DATA="$VULPINE_RUN/nav/codenav-db"
 export CODENAV_SRC="$VULPINE_RUN/build/src"
 codenav search main 2>/dev/null | head -1 \
     || { echo "codenav unusable — stage 2 did not leave a queryable index"; exit 1; }
-test -f "$VULPINE_RUN/features/$feature/trace.ftrc" \
-    || echo "WARN: no stage-5 cppfunctrace; reachability classification is static-only"
-which trace_processor_shell >/dev/null 2>&1 \
-    || echo "WARN: trace_processor_shell not on PATH; Tier-A classification falls back to plaintext grep on trace.ftrc (slower, less precise)"
+test -s "$VULPINE_RUN/features/$feature/functions.txt" \
+    || { echo "stage 5 did not emit functions.txt for $feature (gcov diff missing)"; exit 1; }
+test -s "$VULPINE_RUN/features/$feature/coverage.json" \
+    || { echo "stage 5 did not emit coverage.json for $feature"; exit 1; }
 ```
 
 ## Audit budget — depth over breadth
@@ -44,8 +44,8 @@ Every fnaudit entry must be anchored to actual tool output, not prose:
   `codenav body` returns nothing, SKIP the function to `skipped.txt`
   with reason `symbol unresolved` — do NOT write a prose-only audit.
 - `callers_count` — `codenav callers <symbol> | wc -l`.
-- `reach_evidence` — the path of the `trace.ftrc` (or
-  `trace.ftrc.ext-<sym>`) in which this symbol was observed firing.
+- `reach_evidence` — the path of the `coverage.json` (or
+  `coverage.ext-<sym>.json`) in which this symbol was observed firing.
   Required for every entry; absent entries are rejected by the stage-7
   worklist.
 - Every `issues[].site` cites a specific line range from `codenav body`
@@ -82,25 +82,22 @@ Read the `fnaudit` skill's SKILL.md before writing entries. Schema fields:
    evidence, not by prose-plausibility. For each candidate, assign a
    tier:
 
-   - **Tier A (observed)** — the symbol appears in the stage-5
-     `features/$feature/trace.ftrc`, i.e. it actually fired when the
-     real daemon/CLI processed the feature's seed corpus. Confirm with:
-     ```bash
-     trace_processor_shell -q \
-       "select count(*) from slice where name='$SYM'" \
-       features/$feature/trace.perfetto-trace
-     ```
-     If the count is ≥ 1, the symbol is Tier A. These are first-class
-     audit targets.
-   - **Tier B (statically reachable, dynamically unobserved)** — not
-     in the trace, but `codenav reachable --from <Tier-A-ancestor>`
-     shows any static path to this symbol (path length ≤ 5 is
-     preferred; longer paths are fine but lower priority). Do NOT
-     audit Tier B symbols until you have converted them to Tier A via
-     the fuzzer-extension workflow in step 2-bis. A static edge is
-     necessary but not sufficient — the callgraph can't tell you which
-     state-dependent path a concrete run actually takes, so we require
-     dynamic proof.
+   - **Tier A (observed)** — the symbol appears in
+     `features/$feature/functions.txt` (which stage 5 derived from
+     `hit_by(Fi) \ hit_by(baseline)` gcov coverage). By construction
+     every entry in `functions.txt` fired during the stage-5 feature
+     fuzzer run; all of them are Tier A. These are first-class audit
+     targets. `coverage.json` is authoritative; trace.ftrc is not
+     consulted at this stage (stage 7 uses it for taint-chain context
+     only).
+   - **Tier B (statically reachable, dynamically unobserved)** — NOT
+     in `functions.txt`, but `codenav reachable --from <Tier-A
+     ancestor>` shows any static path to this symbol (path length ≤ 5
+     preferred; longer paths are lower priority). Do NOT audit Tier B
+     symbols until you have converted them to Tier A via the fuzzer-
+     extension workflow in §2-bis. A static edge is necessary but not
+     sufficient — the callgraph can't tell you which state-dependent
+     path a concrete run actually takes, so we require dynamic proof.
    - **Tier C (unreachable)** — no static path from any Tier-A
      ancestor. Log to `skipped.txt` with reason `not reachable from
      traced entry points` and skip. These are coverage-diff noise.
@@ -115,7 +112,7 @@ Read the `fnaudit` skill's SKILL.md before writing entries. Schema fields:
      "tier_a_observed":          [...],
      "tier_b_reachable_pending": [...],
      "tier_b_reachable_promoted": [
-       {"symbol": "...", "promoted_by": "trace.ftrc.ext-<sym>"}
+       {"symbol": "...", "promoted_by": "coverage.ext-<sym>.json"}
      ],
      "tier_c_unreachable":       [...]
    }
@@ -134,21 +131,20 @@ Read the `fnaudit` skill's SKILL.md before writing entries. Schema fields:
       find the shortest static path. Read each intermediate function's
       body to identify the input condition (byte value, length field,
       config flag, protocol opcode) that selects the branch toward
-      `G`.
+      `$G`.
    3. Produce a minimal extension to `fuzz.sh` / seeds — a new seed
       byte pattern, a new CLI flag, an additional protocol request —
-      that the static analysis predicts will reach `G`. Keep the
+      that the static analysis predicts will reach `$G`. Keep the
       extension small; one branch condition at a time.
-   4. Re-run the extended `fuzz.sh` against the real daemon under
-      cppfunctrace (the same `configure-target.sh --traced` path
-      stage 5 used). Capture the new trace as
-      `features/$feature/trace.ftrc.ext-$G` (and the perfetto form).
-   5. Query the new trace for `$G`. If count ≥ 1: promote to Tier A,
-      record the promotion in `reachability.json` with
-      `promoted_by: trace.ftrc.ext-$G`, commit the extended `fuzz.sh`
-      diff to `features/$feature/fuzz.sh.ext-$G.patch`, and audit
-      normally. The `fnaudit` entry MUST set
-      `reach_evidence = "trace.ftrc.ext-$G"` so stage 7 can cite it.
+   4. Re-run the extended `fuzz.sh` against the coverage-instrumented
+      build and re-collect gcov via the `gcov-coverage` skill. Write
+      the new coverage set to `features/$feature/coverage.ext-$G.json`.
+   5. Grep the extended coverage for `$G`. If present: promote to
+      Tier A, record the promotion in `reachability.json` with
+      `promoted_by: coverage.ext-$G.json`, commit the extended
+      `fuzz.sh` diff as `features/$feature/fuzz.sh.ext-$G.patch`, and
+      audit normally. The `fnaudit` entry MUST set
+      `reach_evidence = "coverage.ext-$G.json"` so stage 7 can cite it.
    6. If after two extension attempts `$G` still does not fire:
       demote to Tier C, note `"reach_attempts": 2, "reason": "fuzzer
       extension did not reach; suspected path-sensitive guard"` in
