@@ -24,6 +24,27 @@ gate rejects fabricated output:
   `THEORETICAL` = low.
 - Non-THEORETICAL requires `plain-rerun.log`, `verify.gdb`,
   `coverage-delta.txt`.
+- **Standalone harness ban (applies to all CONFIRMED / CONTESTED).**
+  Do NOT place `*.c` / `*.cpp` / `*.cc` files in the issue directory.
+  Do NOT compile a binary and then run it as the trigger. The
+  validator rejects any CONFIRMED / CONTESTED issue whose directory
+  contains self-authored C/C++ source, or whose `asan-run.manifest`
+  argv invokes a binary inside the issue directory or whose basename
+  matches the harness naming patterns (`trigger`, `harness`, `poc`,
+  `test_leak`, `*_driver`, `*_harness`, `*_trigger`, `poc_*`,
+  `trigger_*`, `harness_*`). The dominant failure mode in prior
+  bake-offs was exactly this: the agent wrote a `.c` file that
+  manually constructed struct state with attacker-chosen field
+  values, compiled it, linked the ASan-built library, and the ASan
+  frame landed in real upstream code. The earlier harness-frame
+  check passed, but the initial conditions the struct was seeded
+  with were unreachable from any real calling convention. Bytes fed
+  to a real daemon / CLI / client script are the only acceptable
+  triggers. If the only way to reach the bug is by bypassing public
+  API constructors or by setting a private struct field directly,
+  downgrade to THEORETICAL and explain in the Verification Status
+  section what upstream change would make it reachable — don't
+  harness-confirm it.
 - **CONFIRMED on memory-corruption** (UAF, double-free, OOB R/W, heap/
   stack overflow, type confusion, use-of-uninit) requires:
     - `asan.log` produced by `$VULPINE_ROOT/tools/capture-asan.sh` —

@@ -191,6 +191,55 @@ validate_one() {
     fi
   fi
 
+  # ---- Standalone-harness ban (for CONFIRMED / CONTESTED). ----------------
+  # The dominant failure mode in the bake-off: agent writes a .c file that
+  # manually constructs struct state with attacker-chosen field values,
+  # compiles it, links against the ASan-built upstream library, runs it.
+  # The ASan frame lands in real upstream code (so the earlier harness-
+  # frame check passes) but the initial conditions the struct is seeded
+  # with are unreachable from any real calling convention (no real caller
+  # of der_get_octet_string_ber exists inside Heimdal; no public API lets
+  # an attacker set OpusMSDecoder.matrix->cols=1 with channels=4; no
+  # realistic LDAP operation drives a->a_numvals near UINT_MAX).
+  #
+  # The ban: a CONFIRMED or CONTESTED issue directory may not contain
+  # self-authored C/C++ source, and its asan-run.manifest argv may not
+  # invoke a binary inside the issue directory or a binary whose
+  # basename matches the harness naming patterns. Trigger must go
+  # through a real entry point (daemon wrapper, system CLI, or a
+  # client script feeding bytes to the real target).
+  if [ "$status" = "CONFIRMED" ] || [ "$status" = "CONTESTED" ]; then
+    local c_srcs
+    c_srcs=$(find "$dir" \
+        \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' -o -name '*.C' \) \
+        -not -path "*/evidence/*" 2>/dev/null | head -3)
+    if [ -n "$c_srcs" ]; then
+      fail "$dir" "issue directory contains self-authored C/C++ source (standalone harness): $(echo $c_srcs | tr '\n' ' '). Trigger must invoke a real daemon/CLI entry point (configure-target.sh --asan + bytes on the wire, ldapsearch / curl / nc / python client, or an upstream-shipped CLI like slapadd / opus_demo / pjsua). Standalone library harnesses are banned because they let the agent forge initial conditions no real caller produces — move the repro into bytes fed to the real binary, or downgrade to THEORETICAL."
+      return 1
+    fi
+    local manifest="$dir/asan-run.manifest"
+    if [ -f "$manifest" ]; then
+      local argv_line first_word basename_argv
+      argv_line=$(grep -h '^argv:' "$manifest" 2>/dev/null | head -1 | sed 's/^argv:[[:space:]]*//')
+      if [ -n "$argv_line" ]; then
+        first_word=$(echo "$argv_line" | awk '{print $1}')
+        case "$first_word" in
+          "$dir"/*|"${dir%/}"/*)
+            fail "$dir" "asan-run.manifest argv begins with '$first_word' — a binary inside the issue directory. Standalone harnesses are banned; trigger must invoke a real daemon/CLI wrapper (e.g. build/run-asan-<name>.sh, upstream CLI under build/build-asan/, or a system client like ldapsearch/curl/nc/python)."
+            return 1
+            ;;
+        esac
+        basename_argv=$(basename "$first_word" 2>/dev/null)
+        case "$basename_argv" in
+          trigger|harness|poc|test_leak|test_harness|*_driver|*_trigger|*_harness|poc_*|trigger_*|harness_*|*_poc)
+            fail "$dir" "asan-run.manifest argv invokes '$basename_argv' — matches the standalone-harness naming pattern. Re-drive the trigger through a real entry point (daemon wrapper or system CLI). A harness that calls library functions directly cannot prove reachability from the deployed product."
+            return 1
+            ;;
+        esac
+      fi
+    fi
+  fi
+
   # ---- CONTESTED: 4 hypotheses + 4 rebuttals, no verdict. -----------------
   if [ "$status" = "CONTESTED" ]; then
     [ -d "$dir/evidence" ] \
