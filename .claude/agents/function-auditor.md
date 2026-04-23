@@ -22,6 +22,8 @@ codenav search main 2>/dev/null | head -1 \
     || { echo "codenav unusable — stage 2 did not leave a queryable index"; exit 1; }
 test -f "$VULPINE_RUN/features/$feature/trace.ftrc" \
     || echo "WARN: no stage-5 cppfunctrace; reachability classification is static-only"
+which trace_processor_shell >/dev/null 2>&1 \
+    || echo "WARN: trace_processor_shell not on PATH; Tier-A classification falls back to plaintext grep on trace.ftrc (slower, less precise)"
 ```
 
 ## Audit budget — depth over breadth

@@ -192,29 +192,29 @@ validate_one() {
   fi
 
   # ---- Standalone-harness ban (for CONFIRMED / CONTESTED). ----------------
-  # The dominant failure mode in the bake-off: agent writes a .c file that
-  # manually constructs struct state with attacker-chosen field values,
-  # compiles it, links against the ASan-built upstream library, runs it.
-  # The ASan frame lands in real upstream code (so the earlier harness-
-  # frame check passes) but the initial conditions the struct is seeded
-  # with are unreachable from any real calling convention (no real caller
-  # of der_get_octet_string_ber exists inside Heimdal; no public API lets
-  # an attacker set OpusMSDecoder.matrix->cols=1 with channels=4; no
-  # realistic LDAP operation drives a->a_numvals near UINT_MAX).
+  # Common failure mode: agent writes a .c file that manually constructs
+  # struct state with attacker-chosen field values, compiles it, links
+  # against the ASan-built upstream library, runs it. The ASan frame
+  # lands in real upstream code (so the earlier harness-frame check
+  # passes) but the initial conditions the struct is seeded with are
+  # unreachable from any real calling convention — the vulnerable
+  # function has no caller that would pass the required struct shape,
+  # or the public API's constructor validates the parameters the
+  # harness directly wrote.
   #
   # The ban: a CONFIRMED or CONTESTED issue directory may not contain
   # self-authored C/C++ source, and its asan-run.manifest argv may not
   # invoke a binary inside the issue directory or a binary whose
   # basename matches the harness naming patterns. Trigger must go
-  # through a real entry point (daemon wrapper, system CLI, or a
-  # client script feeding bytes to the real target).
+  # through a real entry point (daemon wrapper, upstream-shipped CLI,
+  # or a client script feeding bytes to the real target).
   if [ "$status" = "CONFIRMED" ] || [ "$status" = "CONTESTED" ]; then
     local c_srcs
     c_srcs=$(find "$dir" \
         \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' -o -name '*.C' \) \
         -not -path "*/evidence/*" 2>/dev/null | head -3)
     if [ -n "$c_srcs" ]; then
-      fail "$dir" "issue directory contains self-authored C/C++ source (standalone harness): $(echo $c_srcs | tr '\n' ' '). Trigger must invoke a real daemon/CLI entry point (configure-target.sh --asan + bytes on the wire, ldapsearch / curl / nc / python client, or an upstream-shipped CLI like slapadd / opus_demo / pjsua). Standalone library harnesses are banned because they let the agent forge initial conditions no real caller produces — move the repro into bytes fed to the real binary, or downgrade to THEORETICAL."
+      fail "$dir" "issue directory contains self-authored C/C++ source (standalone harness): $(echo $c_srcs | tr '\n' ' '). Trigger must invoke a real daemon/CLI entry point: configure-target.sh --asan + bytes on the wire via a client tool (curl / nc / python3 / vendor CLI), or an upstream-shipped CLI invoked through the run-asan-<name>.sh wrapper emitted by stage 1. Standalone library harnesses are banned because they let the agent forge initial conditions no real caller produces — move the repro into bytes fed to the real binary, or downgrade to THEORETICAL."
       return 1
     fi
     local manifest="$dir/asan-run.manifest"
@@ -225,7 +225,7 @@ validate_one() {
         first_word=$(echo "$argv_line" | awk '{print $1}')
         case "$first_word" in
           "$dir"/*|"${dir%/}"/*)
-            fail "$dir" "asan-run.manifest argv begins with '$first_word' — a binary inside the issue directory. Standalone harnesses are banned; trigger must invoke a real daemon/CLI wrapper (e.g. build/run-asan-<name>.sh, upstream CLI under build/build-asan/, or a system client like ldapsearch/curl/nc/python)."
+            fail "$dir" "asan-run.manifest argv begins with '$first_word' — a binary inside the issue directory. Standalone harnesses are banned; trigger must invoke a real daemon/CLI wrapper (e.g. build/run-asan-<name>.sh, upstream CLI under build/build-asan/, or a system client tool like curl/nc/python3 speaking the target's protocol)."
             return 1
             ;;
         esac
@@ -274,12 +274,13 @@ validate_one() {
   # ---- Evidence layer: application — require REAL trace citation +
   #      taint-chain.md whose final classification is attacker-controlled.
   # This closes the failure mode where a harness forges internal state
-  # (OpusMSDecoder manually constructed with channels=4, matrix->cols=1;
-  # BER buffer hand-built with a malformed length prefix) so the crash
-  # frame lands in upstream code but the initial conditions are not
-  # reachable from any public entry. Static reachability plus a crash is
-  # not enough — the suspect value must be traced back to an attacker
-  # byte via rr.
+  # (a struct manually constructed with attacker-chosen field values,
+  # a buffer hand-built with a malformed prefix, a decoder context
+  # initialised past a public-API sanity check) so the crash frame
+  # lands in upstream code but the initial conditions are not reachable
+  # from any public entry. Static reachability plus a crash is not
+  # enough — the suspect value must be traced back to an attacker byte
+  # via rr.
   if [ "$ev_layer" = "application" ] && [ "$status" != "THEORETICAL" ]; then
     # The reachability citation must name a real trace file (stage-5 or
     # fuzzer-extension), not just a codenav call-graph path.

@@ -70,25 +70,27 @@ For each feature `Fi` in `ATTACK_SURFACE.md`:
       is reachable through it, THIS IS the fuzzer. `fuzz.sh` must:
         - `./configure-target.sh --traced` to start the cppfunctrace-built
           daemon in the background.
-        - Send the feature-specific request(s) through the real client or
-          protocol. `ldapsearch` / `ldapmodify` for slapd, `kinit` /
-          `kadmin` for krb5, crafted SIP INVITE via a scripted client for
-          pjsip, etc. A one-line python client, a `curl -X POST` with
-          `--data-binary @`, or `nc` piping raw bytes all qualify.
+        - Send the feature-specific request(s) through the real client
+          or protocol. Use whichever client tool matches the target's
+          protocol — a vendor-shipped CLI, a one-line Python client, a
+          `curl -X POST --data-binary @`, or `nc` piping raw bytes all
+          qualify. The choice is per-target; the requirement is that
+          bytes arrive at the daemon via its real network path.
         - Wait for the daemon to process the request (a short sleep or a
           client-side acknowledgement).
         - SIGTERM the daemon so cppfunctrace flushes. `ftrc2perfetto` the
           resulting `.ftrc` into `features/$feature/trace.ftrc` and
           `trace.perfetto-trace`.
-   2. **CLI entry point** — for CLI-only tools (opusdec, opusenc), run
-      `run-traced-<name>.sh` with crafted stdin/argv.
+   2. **CLI entry point** — for CLI-only targets, run
+      `run-traced-<name>.sh` with crafted stdin / argv / input file.
    3. **Standalone library harness** — only acceptable when the target
       ships no daemon and no CLI that exercises this feature. Compile a
-      one-file C program against `libcppfunctrace` + the upstream library,
-      feed it crafted input, collect the trace. The `fuzz.sh` MUST state
-      why options 1 and 2 were not applicable (e.g. "libopus is a pure
-      library — the project ships no daemon") or the agent should re-
-      consider whether the feature is real.
+      one-file C program against `libcppfunctrace` + the upstream
+      library, feed it crafted input, collect the trace. The `fuzz.sh`
+      MUST state why options 1 and 2 were not applicable (typically:
+      "target is a pure library — the project ships no daemon and no
+      CLI tool"). If option 1 or 2 is available and the agent chose 3
+      anyway, that is a stage-5 bug.
 
    Using option 3 when option 1 is available is a stage-5 bug. The
    point of the trace is to see what the *deployed product* does when an

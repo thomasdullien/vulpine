@@ -6,7 +6,7 @@
 # presence of $VULPINE_RUN/build/run-traced-<name>.sh for any name OTHER
 # than "harness-*"), the trace MUST be a real cppfunctrace capture from
 # the daemon, not a skip. The live bake-off showed agents repeatedly
-# skipping the daemon trace for slapd/krb5kdc targets even when the
+# skipping the daemon trace for network-daemon targets even when the
 # traced wrappers existed; this gate closes that loophole.
 #
 # Usage:

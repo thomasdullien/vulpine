@@ -192,36 +192,28 @@ One paragraph — enough that a maintainer could write the patch.
 
 ## Approach
 
-0. **Library → application upgrade pass (run FIRST).** For every
-   existing `issues/*/report.md` whose `## Evidence layer` reads
-   `library`, attempt to upgrade it to `application` before hunting
-   new leads. The trigger bytes are already written; the daemon
-   wrappers from stage 1 are already built; the only new work is the
-   minimal client invocation that delivers those bytes through the
-   real protocol.
+0. **Library → application upgrade / downgrade pass (run FIRST).**
+   For every existing `issues/*/report.md` whose `## Evidence layer`
+   reads `library`, either upgrade to `application` or downgrade to
+   THEORETICAL. Under the harness ban, "leave as library-CONFIRMED
+   with a self-authored harness" is NOT a valid outcome — the
+   validator rejects it.
 
    Per issue:
-   - Identify the attacker entry point from `ATTACK_SURFACE.md` (e.g.
-     for a liblber bug → LDAP PDU to slapd; for a pjmedia SDP bug →
-     SIP INVITE; for a krb5 asn.1 bug → AS-REQ).
-   - `configure-target.sh --asan` to start the ASan daemon. (Add
-     `--traced` if you also want the function-call trace.)
-   - Re-drive the trigger bytes through the real protocol: a one-line
-     `ldapsearch` / `curl` / `python` client / `nc` is usually
-     sufficient.
-   - Capture ASan via `$VULPINE_ROOT/tools/capture-asan.sh <issue-dir>
-     -- <client>`, with the daemon's stderr teed into asan.log.
-   - If the `#0` stack frame lands inside `$VULPINE_RUN/build/` under
-     the daemon binary: flip `## Evidence layer: application`,
-     re-evaluate severity (no longer capped at medium), re-run
-     `validate-issue.sh`.
-   - If it doesn't reach the daemon: leave `Evidence layer: library`,
-     add one sentence to Verification Status naming which entry
-     points you tried. Stage 8 revisits.
-
-   Do NOT skip this pass. "Looks like too much work" is not a valid
-   reason; each upgrade should take <5 minutes and turns weak
-   library-evidence primitives into real application-layer findings.
+   - Identify the attacker entry point from `ATTACK_SURFACE.md` (the
+     feature whose dispatch calls the vulnerable function).
+   - `configure-target.sh --asan` to start the daemon.
+   - Re-drive the trigger bytes through the real protocol using any
+     client tool that speaks it (vendor CLI, `curl`, `nc`, `python3`
+     socket script, etc.).
+   - Capture via `capture-asan.sh <issue-dir> -- <client>`.
+   - If ASan fires inside upstream daemon code: flip Evidence layer
+     to `application`, run the taint-chain workflow, re-validate.
+   - If the daemon doesn't crash under real-protocol input:
+     downgrade Verification Status to THEORETICAL, delete any
+     `*.c` / `*.cpp` / `*.cc` harness sources from the issue dir,
+     and add one sentence naming the entry points you tried. Stage 8
+     may revisit via primitive-chaining.
 
 1. **Per-feature briefings, not raw audit log.** For each feature dir
    with an `audit-summary.md` (emitted by stage 6), read the summary
@@ -234,9 +226,11 @@ One paragraph — enough that a maintainer could write the patch.
    $VULPINE_ROOT/tools/fnaudit-summarize.py --feature <F> \
        --run $VULPINE_RUN --out $VULPINE_RUN/features/<F>/audit-summary.md
    ```
-2. **Worklist.** From the summaries, pull critical/high symbols that are
-   `dynamic-observed` first, then `static-only-reachable` (severity
-   capped at medium per spec), then everything else. Save to a file so a
+2. **Worklist.** From the summaries, pull critical/high symbols that
+   are **Tier A** (dynamically observed in `trace.ftrc`) first, then
+   Tier-B-promoted symbols (stage 6 extended the fuzzer to reach them
+   and captured `trace.ftrc.ext-<sym>`). Skip pure Tier B — stage 6
+   already refused to audit those. Save the worklist to a file so a
    context reset can resume.
 3. **Priority.** Read `ATTACK_SURFACE.md` once. Work features in
    priority order.
@@ -244,52 +238,24 @@ One paragraph — enough that a maintainer could write the patch.
    - `fnaudit get <symbol>`: read `intent`, `issues[]`, `global_state`.
    - `codenav body` / `codenav callers` / `codenav reachable`: build a
      theory of how attacker input reaches the bug.
-   - Write a **trigger that hits the real binary**, not a rewrite.
-     Acceptable shapes (in order of preference):
-       1. Network bytes against the `run-asan-<daemon>.sh` wrapper
-          started by `configure-target.sh --asan`.
-       2. stdin/argv against the ASan-built upstream CLI.
-       3. ≤20-line C client linked against the upstream ASan-built
-          library using only published headers. The ASan `#0` frame
-          MUST land inside `$VULPINE_RUN/build/`.
-     Never re-implement the vulnerable function in `trigger.c`.
+   - Write a **trigger that drives the real binary through its real
+     entry point**. Only two shapes are accepted by the validator:
+       1. Network / IPC bytes to `configure-target.sh --asan` via any
+          client tool that speaks the target's protocol (vendor CLI,
+          `curl`, `nc`, `python3` socket script, `echo … | nc …`).
+       2. stdin / argv / file input to an upstream-shipped CLI via
+          the `run-asan-<tool>.sh` wrapper emitted by stage 1.
+     Self-authored `*.c` / `*.cpp` / `*.cc` harnesses are banned — see
+     §HARD GATE. If neither shape 1 nor 2 can drive the vulnerable
+     function with attacker-controllable values in the suspect
+     parameter, the finding is THEORETICAL; do NOT build a harness
+     to confirm it.
 
-     **Library-level vs. application-level CONFIRMED.** When the target
-     ships a daemon/CLI (most do — krb5kdc, kadmind, slapd, pjsua, …),
-     a library-harness trigger (shape 3) proves only that the *library
-     function crashes*, not that the *deployed product exposes the
-     bug*. A BER decoder flaw confirmed by a standalone liblber harness
-     is a library-level CONFIRMED; it becomes an application-level
-     CONFIRMED only once a shape-1 trigger (network bytes to slapd or
-     equivalent) fires ASan inside that same function.
-
-     Rule: if `ATTACK_SURFACE.md` names any feature whose entry point
-     plausibly calls the vulnerable function (walk it via `codenav
-     reachable --from <entry>`, or — for dynamic-dispatch paths that
-     codenav misses — check whether the function appears in any
-     `features/<F>/trace.ftrc`), you MUST use shape 1. Only fall back
-     to shape 3 when every plausible entry point demonstrably does
-     NOT reach the function.
-
-     Report.md records this explicitly. Add an `## Evidence layer`
-     section with one of:
-
-     - `application` — trigger is shape 1 (daemon under `--asan`) and
-       ASan fired inside the vulnerable function. This is the only
-       state where a memory-corruption finding should be tagged
-       `critical` or `high` without a "library-harness" caveat.
-     - `library` — trigger is shape 2 or 3 (library harness); the bug
-       is real in the library but its reachability from the deployed
-       product is not proven. Severity is capped at `medium` until a
-       shape-1 trigger is built, and the report must list the
-       attempted shape-1 paths and why each failed (e.g. "slapd's
-       `bind_req_decode` path uses `ber_scanf` format `'a'` which
-       selects the safe `LBER_BV_ALLOC` branch in ber_get_stringbv;
-       search handlers use `'m'` but the PDU buffer is over-allocated
-       by the receive layer by N bytes so the 1-byte overflow lands
-       on slack"). Stage 8 will revisit; the goal of recording the
-       "why I couldn't reach this" is to give stage 8 a starting
-       point, not to permanently close the issue.
+     **Evidence layer** goes in report.md as `application` (shape 1,
+     daemon crash) or `library` (shape 2, CLI-tool crash; severity
+     capped at medium by the validator). Escalation from library to
+     application requires re-triggering through shape 1 and producing
+     the taint-chain.
    - `line-execution-checker`: if the vulnerable line didn't fire, the
      trigger is wrong — revise.
    - `$VULPINE_ROOT/tools/capture-asan.sh <issue-dir> -- <cmd>`: run
@@ -466,7 +432,8 @@ fnaudit search "severity:critical OR severity:high" --limit 30 > leads.jsonl
 SYMBOL=$(head -1 leads.jsonl | jq -r .symbol_qualified)
 
 # 2. Reachability — paste output into report.md.
-codenav reachable accept_sec_context --direction calls --depth 4 \
+#    Use the Tier-A ancestor from the feature's audit-summary.md.
+codenav reachable <public-entry-from-ATTACK_SURFACE> --direction calls --depth 4 \
     | tee reachability.log | grep -c "$SYMBOL"
 
 # 3. Body anchor.
