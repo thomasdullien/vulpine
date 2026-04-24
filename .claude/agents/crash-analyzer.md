@@ -37,34 +37,24 @@ Write your hypothesis as `root-cause-hypothesis-<zero-padded-round>.md`.
 
 ## Hard evidence requirements
 
-The checker will reject you mechanically if any of these fail — do NOT
-submit a hypothesis that violates them:
+The checker rejects mechanically on any violation:
 
-1. **≥ 3 RR output sections**, each clearly labeled:
-   - **Allocation**: the `malloc` / `new` / `mmap` / stack-frame site that
-     produced the object whose lifetime is abused.
-   - **Modification(s)**: at least one intermediate event — a write, a
-     `free`, a realloc, a type punning — that establishes the bad state.
-   - **Crash / bad access**: the faulting instruction, with the register
-     values at fault.
-2. **≥ 5 distinct real memory addresses** in `0x…` form in the document.
-   These must be values observed live in rr, not placeholders or symbolic
-   names. (Example: `(rdi) = 0x7ffff6a12340`, not `(rdi) = &buf`.)
-3. **Zero hedging language.** The checker greps for these words and
-   rejects on any hit: `likely`, `probably`, `should`, `expected`,
-   `seems`, `maybe`, `perhaps`, `appears`, `might`, `possibly`, `I think`,
-   `I believe`. If you are not certain of a claim, do NOT include it.
-4. **Every step in the pointer chain MUST include three sub-parts:**
-   - *Code* — the exact source line(s), copied from the tree with file:line.
-   - *RR commands* — the exact commands you ran (`rr replay`, `break`,
-     `watch -l`, `continue`, `disas`, `info registers`, etc.).
-   - *Actual output* — the literal text rr printed, including addresses
-     and register values. Not paraphrased, not summarised.
-5. **Source ↔ assembly match at the crash site.** Include the disassembly
-   (`disas /s`) of the faulting function showing the instruction that
-   dereferences the corrupted pointer, alongside the source line it
-   corresponds to. If the compiler elided / reordered / inlined, say so
-   explicitly and show the evidence.
+1. **≥ 3 RR output sections**, labeled:
+   - Allocation (malloc/new/mmap/stack site for the abused object).
+   - Modification(s) — ≥1 intermediate event (write, free, realloc,
+     type pun) establishing the bad state.
+   - Crash — faulting instruction with register values.
+2. **≥ 5 distinct `0x…` addresses** observed live in rr (not
+   placeholders; not `&buf` — use `0x7ffff6a12340`).
+3. **Zero hedging language.** Checker rejects on any word from:
+   `likely | probably | should | expected | seems | maybe | perhaps |
+   appears | might | possibly | I think | I believe`.
+4. **Each pointer-chain step has Code + RR commands + Actual output**
+   (source line w/ file:line; the exact rr commands you ran; the
+   literal text rr printed — no paraphrasing).
+5. **Source ↔ assembly match at the crash site.** Include `disas /s`
+   showing the faulting instruction alongside its source line; if the
+   compiler inlined/reordered, state it and show evidence.
 
 ## Required structure of the hypothesis document
 
@@ -148,29 +138,22 @@ verbatim, followed by where in the current hypothesis it is addressed
 
 ## Approach
 
-1. **Read the issue.** Load `issue_dir/report.md`, `asan.log`, `trigger.sh`.
-2. **Obtain an rr recording.** If `issue_dir/rr-trace/` already exists, use
-   it. Otherwise follow the `rr-debugger` skill to record the plain-build
-   trigger. (Recording under ASan is fine; the checker prefers plain where
-   possible because ASan's red-zones distort the addresses.)
-3. **Identify the faulting instruction** first — `rr replay`, `continue`,
-   let it crash, grab `$pc`, `info registers`, `disas /s`. That gives you
-   the bottom of the chain and the address being abused.
-4. **Walk backwards** via `reverse-cont`, `reverse-stepi`, and data
-   watchpoints (`watch -l *(void **)0x…`) to find the last legitimate
-   modification of the corrupted pointer/object. Record every stop, every
-   address, every register value as you go.
-5. **Bottom out at the allocation.** Continue walking back until you reach
-   the `malloc` / object construction that produced the address. That is
-   the root of the chain.
-6. **Disassemble and sanity-check source↔asm.** Run `disas /s` at the
-   crash site and compare with the source. If there is a mismatch
-   (compiler optimisation, inlining), be explicit.
-7. **Write the hypothesis** in exactly the structure above. Every claim
-   must have supporting rr output in the document.
-8. **On round ≥ 2**, read `rebuttal_path` first and design the revision
-   around addressing its points. The "Addressed rebuttal points" section
-   is mandatory and the checker will verify each point is answered.
+1. Read `issue_dir/report.md`, `asan.log`, `trigger.sh`.
+2. Obtain an rr recording (use existing `rr-trace/` if present,
+   otherwise record per `rr-debugger` skill — plain build preferred
+   over ASan to avoid red-zone offset distortion).
+3. Identify the fault: `rr replay` → `continue` → crash; grab `$pc`,
+   `info registers`, `disas /s`. That's the bottom of the chain.
+4. Walk backwards via `reverse-cont`, `reverse-stepi`, watchpoints
+   (`watch -l *(void **)0x…`) to the last legitimate modification of
+   the corrupted object. Record every stop, address, register value.
+5. Bottom out at the allocation (malloc / construction).
+6. `disas /s` at the crash site; compare to source; call out inlining
+   or reordering if present.
+7. Write the hypothesis per the structure above. Every claim needs
+   rr output backing it.
+8. Round ≥ 2: read `rebuttal_path` first. The `Addressed rebuttal
+   points` section is mandatory — the checker verifies each.
 
 ## Skills
 
@@ -182,19 +165,13 @@ verbatim, followed by where in the current hypothesis it is addressed
 
 ## Footguns
 
-- **No hedging language, ever.** The checker fails you on the first hit.
-  If you cannot be certain of a claim with an rr artifact, omit it.
-- **No symbolic placeholders.** `0xDEADBEEF`, `0x<ADDR>`, `0x????` all fail.
-  Every address is a real value observed in rr.
-- **Do not paraphrase rr output.** Copy it verbatim — the checker parses
-  the actual prompts (`(rr)`), addresses, and register names.
-- **Do not conflate ASan red-zone addresses with real allocator addresses.**
-  If your rr recording was captured under ASan, note this and show the
-  shadow-map offset.
-- **Do not skip a modification step to keep the doc short.** If there are
-  five modifications, document all five. The checker will notice gaps.
-- **Do not answer only the mechanical rebuttal points in round ≥ 2.**
-  Address content criticisms too — otherwise the checker re-rejects.
+- No hedging language. Ever.
+- No symbolic placeholders (`0xDEADBEEF`, `0x<ADDR>`). Real addresses only.
+- Copy rr output verbatim — do not paraphrase.
+- ASan red-zone offsets distort addresses; if recording under ASan,
+  note it and show the shadow-map offset.
+- Document every modification step; do not skip to keep the doc short.
+- Round ≥ 2: address content criticisms, not just mechanical points.
 
 ## Return value
 

@@ -34,74 +34,51 @@ One of:
 Return value to the caller: `accept` or `reject`, plus the rebuttal path
 on reject.
 
-## Mechanical gates (fail fast; if ANY fails, write rebuttal, do not
-proceed to content gates)
+## Mechanical gates (fail fast; write rebuttal on any hit)
 
-Run these literally before reading the document for substance. Each
-failure is an individual numbered bullet in the rebuttal.
+Each failure = one numbered bullet in the rebuttal.
 
-1. **Header present.** The document begins with
-   `# Root-cause hypothesis — issue <id>, round <n>`.
-2. **Required top-level sections exist** (case-sensitive):
-   `## Summary`, `## Environment`, `## Pointer lifecycle`,
+1. **Header:** doc starts with `# Root-cause hypothesis — issue <id>, round <n>`.
+2. **Required sections** (case-sensitive): `## Summary`,
+   `## Environment`, `## Pointer lifecycle`,
    `## Source ↔ assembly correspondence at crash site`,
-   `## Violated invariant`, `## Addresses observed (index)`.
-   For round ≥ 2: `## Addressed rebuttal points` must also exist.
-3. **≥ 3 RR output sections.** Under `## Pointer lifecycle` there must be
-   at least three numbered subsections, each containing a verbatim rr
-   transcript block (fenced code block that includes at least one
-   `(rr)` prompt line or one address-bearing line). One of them must be
-   the allocation, one of them must be the crash.
-4. **≥ 5 distinct `0x…` addresses** across the whole document. Extract
-   all tokens matching `0x[0-9a-fA-F]{4,16}`, unique, discard obvious
-   placeholders (`0xDEADBEEF`, `0xCAFEBABE`, strings of a single hex
-   digit like `0x00000000` repeated). At least five must remain.
-5. **No hedging language.** Case-insensitive grep for whole words from
-   this list: `likely`, `probably`, `should`, `expected`, `seems`,
-   `maybe`, `perhaps`, `appears`, `might`, `possibly`, `i think`,
-   `i believe`. Any hit is a fail. (Exception: the `Addressed rebuttal
-   points` section may quote a previous rebuttal verbatim; such quotes
-   must be explicitly labelled with a leading `> ` block-quote marker
-   and do not count.)
-6. **Per-step three-part structure.** Each numbered subsection under
-   `## Pointer lifecycle` must contain all three of: a `**Code**` line
-   with a `file:line` reference, a `**RR commands:**` fenced block, and
-   an `**Actual output:**` fenced block. Missing any of the three is a
-   per-step fail.
-7. **Source↔asm section has disassembly.** The section must contain at
-   least one `disas` output block showing real instructions (e.g.
-   `mov`, `lea`, `call`) with addresses in `0x…` form.
+   `## Violated invariant`, `## Addresses observed (index)`. Round ≥ 2
+   also needs `## Addressed rebuttal points`.
+3. **≥ 3 RR output sections** under `## Pointer lifecycle`: numbered
+   subsections, each with a fenced block containing ≥1 `(rr)` prompt
+   or address line. One must be allocation; one must be crash.
+4. **≥ 5 distinct `0x…` addresses** across the doc (regex
+   `0x[0-9a-fA-F]{4,16}`, unique; strip placeholders like
+   `0xDEADBEEF`, `0xCAFEBABE`, repeated `0x00000000`).
+5. **No hedging language** (case-insensitive whole-word grep):
+   `likely | probably | should | expected | seems | maybe | perhaps |
+   appears | might | possibly | i think | i believe`. Exception:
+   quoted rebuttal text in `## Addressed rebuttal points` marked with
+   `> ` block-quote.
+6. **Per-step three-part structure** under `## Pointer lifecycle`:
+   each subsection has `**Code**` (with file:line), `**RR commands:**`
+   (fenced), `**Actual output:**` (fenced). Missing any = per-step fail.
+7. **Source↔asm section has disassembly**: ≥1 `disas` block with real
+   mnemonics (`mov`, `lea`, `call`, …) and `0x…` addresses.
 
-Use a shell for the mechanical pass — grep/awk are fine. Do NOT
-approximate; the counts are exact.
+Use grep/awk for the mechanical pass. Counts are exact.
 
 ## Content gates (only if all mechanical gates pass)
 
-Walk the pointer lifecycle in order, from allocation to crash:
-
-1. **Allocation claim has matching rr output.** The stated source line
-   and the observed return value of the allocator must agree with the
-   Actual output block. No symbolic substitution.
-2. **Each modification step's RR commands can plausibly produce the
-   claimed output.** A `watch -l` followed by a single address means the
-   watchpoint was set on that specific 8-byte location; the output
-   should show the old and new value with real addresses.
-3. **Addresses are threaded.** The address produced by step N must be
-   the same address referenced in step N+1 (possibly offset, in which
-   case the offset is documented). If the claimed chain jumps between
-   unrelated addresses, that is a content failure.
-4. **Crash-site assembly matches the source line.** The mnemonic shown
-   in `disas /s` must plausibly implement the source statement.
-   A `mov (%rdi), %rax` at a line that says `return *p` is fine; a
-   `call 0x…` at that same source line without explanation is not.
-5. **The violated invariant is concretely stated** and becomes false at
-   a specific step. Generic statements like "memory safety" are a fail.
-6. **Round ≥ 2: every point from the previous round's rebuttal is
-   addressed.** Cross-check the `## Addressed rebuttal points` section
-   against the actual rebuttal file. Every bullet in the rebuttal's
-   "Required corrections" section must have a corresponding entry here
-   that names the section where the correction was applied AND a
-   concrete description of the change. An unaddressed point is a fail.
+1. **Allocation matches rr output**: claimed source line and allocator
+   return value agree with the Actual output block.
+2. **Each modification's commands plausibly produce the claimed
+   output**: a `watch -l <addr>` shows old and new values at that
+   specific 8-byte location.
+3. **Addresses are threaded**: step N's address = step N+1's (or an
+   offset, documented). Unrelated-address jumps fail.
+4. **Crash-site asm implements the source line**: `mov (%rdi), %rax`
+   at `return *p` is fine; unexplained `call 0x…` is not.
+5. **Violated invariant is concrete** and becomes false at a specific
+   step. "Memory safety" fails.
+6. **Round ≥ 2**: every bullet in the rebuttal's Required corrections
+   has a corresponding entry in `## Addressed rebuttal points` naming
+   the section fixed and describing the change.
 
 ## Rebuttal format
 

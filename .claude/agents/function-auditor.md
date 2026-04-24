@@ -78,129 +78,89 @@ Read the `fnaudit` skill's SKILL.md before writing entries. Schema fields:
 1. **Dedup**: `cat $functions_file | fnaudit get --batch > existing.jsonl`;
    filter out symbols already audited at the current `source_commit`.
 
-2. **Tiered reachability ranking** (MANDATORY). Prioritise by dynamic
-   evidence, not by prose-plausibility. For each candidate, assign a
-   tier:
+2. **Tiered reachability.** For each candidate, assign a tier:
 
-   - **Tier A (observed)** — the symbol appears in
-     `features/$feature/functions.txt` (which stage 5 derived from
-     `hit_by(Fi) \ hit_by(baseline)` gcov coverage). By construction
-     every entry in `functions.txt` fired during the stage-5 feature
-     fuzzer run; all of them are Tier A. These are first-class audit
-     targets. `coverage.json` is authoritative; trace.ftrc is not
-     consulted at this stage (stage 7 uses it for taint-chain context
-     only).
-   - **Tier B (statically reachable, dynamically unobserved)** — NOT
-     in `functions.txt`, but `codenav reachable --from <Tier-A
-     ancestor>` shows any static path to this symbol (path length ≤ 5
-     preferred; longer paths are lower priority). Do NOT audit Tier B
-     symbols until you have converted them to Tier A via the fuzzer-
-     extension workflow in §2-bis. A static edge is necessary but not
-     sufficient — the callgraph can't tell you which state-dependent
-     path a concrete run actually takes, so we require dynamic proof.
+   - **Tier A (observed)** — symbol is in `features/$feature/functions.txt`
+     (stage 5's gcov diff `hit_by(Fi) \ hit_by(baseline)`). First-class
+     audit target.
+   - **Tier B (statically reachable, not observed)** — not in
+     `functions.txt`, but `codenav reachable --from <Tier-A ancestor>`
+     shows a static path (prefer length ≤ 5). Do NOT audit until
+     promoted via §2-bis — the callgraph is path-insensitive and
+     these are where false positives concentrate.
    - **Tier C (unreachable)** — no static path from any Tier-A
-     ancestor. Log to `skipped.txt` with reason `not reachable from
-     traced entry points` and skip. These are coverage-diff noise.
+     ancestor. Log to `skipped.txt`, skip.
 
-   The audit budget (10 rows / feature) is spent Tier A first. Only
-   move to Tier B if Tier A has fewer than 10 entries with plausible
-   issues.
+   Spend the 10-row budget Tier A first; only move to Tier B if A
+   has < 10 plausible issues. Persist to `reachability.json`:
 
-   Persist to `features/$feature/reachability.json`:
    ```json
    {
-     "tier_a_observed":          [...],
+     "tier_a_observed": [...],
      "tier_b_reachable_pending": [...],
      "tier_b_reachable_promoted": [
        {"symbol": "...", "promoted_by": "coverage.ext-<sym>.json"}
      ],
-     "tier_c_unreachable":       [...]
+     "tier_c_unreachable": [...]
    }
    ```
 
-2-bis. **Fuzzer extension for Tier B (pay-to-play).** Before auditing
-   a Tier-B symbol `G` you must prove dynamic reachability by
-   extending the stage-5 fuzzer until `G` actually fires. Do NOT write
-   a standalone harness that calls `G` directly — that is the failure
-   mode this gate exists to eliminate.
+2-bis. **Tier B promotion (pay-to-play).** Before auditing a Tier-B
+   symbol `$G`, prove dynamic reachability by extending the stage-5
+   fuzzer until `$G` fires. Do NOT hand-write a harness that calls
+   `$G` directly.
 
-   Workflow:
+   1. Read `features/$feature/fuzz.sh` + seeds. Walk `codenav
+      reachable --from <Tier-A ancestor> --to $G` and identify the
+      input conditions (byte values, length fields, config flags,
+      opcodes) selecting branches toward `$G`.
+   2. Extend `fuzz.sh` / seeds minimally — one branch condition at
+      a time.
+   3. Re-run against the coverage build; collect via `gcov-coverage`
+      skill; write `features/$feature/coverage.ext-$G.json`.
+   4. Grep for `$G`. If present: promote, record `promoted_by` in
+      `reachability.json`, commit the diff as
+      `fuzz.sh.ext-$G.patch`, audit with
+      `reach_evidence=coverage.ext-$G.json`.
+   5. After 2 failed attempts: demote to Tier C with reason
+      `"reach_attempts": 2, "reason": "fuzzer extension did not
+      reach"`. No harness shortcut.
 
-   1. Read `features/$feature/fuzz.sh` and `features/$feature/seeds/`.
-   2. Walk `codenav reachable --from <Tier-A-ancestor> --to $G` to
-      find the shortest static path. Read each intermediate function's
-      body to identify the input condition (byte value, length field,
-      config flag, protocol opcode) that selects the branch toward
-      `$G`.
-   3. Produce a minimal extension to `fuzz.sh` / seeds — a new seed
-      byte pattern, a new CLI flag, an additional protocol request —
-      that the static analysis predicts will reach `$G`. Keep the
-      extension small; one branch condition at a time.
-   4. Re-run the extended `fuzz.sh` against the coverage-instrumented
-      build and re-collect gcov via the `gcov-coverage` skill. Write
-      the new coverage set to `features/$feature/coverage.ext-$G.json`.
-   5. Grep the extended coverage for `$G`. If present: promote to
-      Tier A, record the promotion in `reachability.json` with
-      `promoted_by: coverage.ext-$G.json`, commit the extended
-      `fuzz.sh` diff as `features/$feature/fuzz.sh.ext-$G.patch`, and
-      audit normally. The `fnaudit` entry MUST set
-      `reach_evidence = "coverage.ext-$G.json"` so stage 7 can cite it.
-   6. If after two extension attempts `$G` still does not fire:
-      demote to Tier C, note `"reach_attempts": 2, "reason": "fuzzer
-      extension did not reach; suspected path-sensitive guard"` in
-      `reachability.json`, and move on. Do NOT hand-write a harness
-      around `$G`; do NOT author an audit entry claiming severity
-      based on static reachability alone.
+3. **Audit Tier-A symbols (incl. promoted Tier B).** `intent` =
+   what the programmer wants (from name, comments, call sites).
+   Look for discrepancies:
+   - integer overflow / sign mismatch / promotion flip
+   - arithmetic before allocation producing surprising sizes
+   - variable-length reads/writes where byte count ≠ arg (N=0 edge)
+   - error paths returning inconsistent codes or failing silently
+   - right-shifts on signed types
+   - global-state mutation visible to callers
+   - allocations / deallocations visible after return
+   - callers that don't check error returns
 
-   Rationale: a function that is statically reachable but resists
-   reasonable fuzzer extension is almost always gated by an input
-   validation check the agent did not model, and findings on such
-   functions tend to be "crashes when called with parameters no real
-   caller produces" — the exact class of false positive we are
-   trying to eliminate.
+   All stage-6 issues are THEORETICAL; stage 7 confirms.
 
-3. **Audit each Tier-A symbol (including Tier-B promotions).** `intent`
-   = what the programmer wants (from name, comments, call sites). Look
-   for discrepancies with the intent:
-   - Integer overflow / sign mismatch / integer promotion flipping signs.
-   - Arithmetic before allocation producing surprising sizes.
-   - Variable-length reads/writes where byte count doesn't match an arg
-     (boundary case `N=0`).
-   - Error paths returning inconsistent codes, or failing silently.
-   - Right-shifts on signed types.
-   - Global-state mutation visible to callers.
-   - Allocations / deallocations visible after return.
-   - Callers that don't check this function's error returns.
-
-   All issues at this stage are THEORETICAL. Stage 7 confirms.
-
-   Each issue record: `{severity, category, description, site,
+   Issue record: `{severity, category, description, site,
    verification_status: "theoretical", testability_notes,
-   verification_blocked_by?}`.
-   - `category` — prefer existing DB vocabulary (`fnaudit list` once at
-     start).
-   - `description` — 1–3 sentences. Stage 7 reads hundreds.
-   - `testability_notes` — how stage 7 could craft a trigger. If the
-     function was observed in the trace, name the seed in
-     `features/$feature/seeds/` that reached it.
-   - `reviewer` — `"vulpine/function-auditor/<model-id>"`.
+   verification_blocked_by?}`. `description` = 1–3 sentences.
+   `testability_notes` = how stage 7 would craft a trigger (name the
+   seed if the symbol was observed). `reviewer` =
+   `vulpine/function-auditor/<model-id>`. `category`: use
+   `fnaudit list` once to see existing vocabulary.
 
-4. **Bulk-write**:
+4. **Bulk-write:**
    ```bash
    fnaudit bulk-add < features/$feature/entries.jsonl
    fnaudit export-jsonl $VULPINE_RUN/audit-jsonl/
    ```
 
-5. **Emit per-feature briefing** (cheapens stage 7's context):
+5. **Per-feature briefing:**
    ```bash
    $VULPINE_ROOT/tools/fnaudit-summarize.py \
        --feature "$feature" --run "$VULPINE_RUN" \
        --out "$VULPINE_RUN/features/$feature/audit-summary.md"
    ```
-   Stage 7 reads this first instead of walking every audit row in-context.
-   The summary joins audit-log.db with `reachability.json` so leads are
-   ranked dynamic-observed > static-only-reachable > unclassified —
-   your three-way classification from step 2 is the authoritative input.
+   Stage 7 reads this instead of walking the audit log in-context.
 
 ## Skills
 

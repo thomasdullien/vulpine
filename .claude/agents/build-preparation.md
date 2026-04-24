@@ -52,21 +52,20 @@ python3 -m venv "$VULPINE_RUN/build/venv"
 `vulpine/scripts/install-tools.sh` already follows this pattern for
 fnaudit; re-use it for any other Python dependency you need to install.
 
-## Runnable wrappers: ASan + traced (both MANDATORY)
+Host may have podman instead of docker. Use
+`CONTAINER=$(command -v podman || command -v docker)` and invoke via
+`"$CONTAINER"` — never hard-code `docker`. Also verify `xxd`, `nc`,
+`jq`, `sqlite3`, `bear`, `rr`, `gdb`, `llvm-symbolizer` are on PATH;
+missing any → list in the return value.
 
-Stages 5, 6, and 7 exercise the target through its real network/CLI
-entry points, not via standalone library harnesses. Stage 1 must emit
-two wrapper scripts per network-facing daemon and per upstream-shipped
-CLI tool: one for the ASan-built binary, one for the cppfunctrace-
-instrumented binary. Enumerate every installed binary the project
-ships (look at `bin/`, `sbin/`, `libexec/`, the CI test binaries, etc.)
-and emit wrappers for each that could accept attacker-controlled input.
+## Runnable wrappers (MANDATORY: ASan + traced)
 
-### run-asan-<name>.sh
+Emit one `run-asan-<name>.sh` and one `run-traced-<name>.sh` per
+network-facing daemon and upstream-shipped CLI. Enumerate `bin/`,
+`sbin/`, `libexec/`, CI test binaries — everything that could accept
+attacker-controlled input.
 
-Stage 7 CONFIRMED memory-corruption requires running the upstream
-binary under ASan and capturing a real crash banner.
-
+`run-asan-<name>.sh`:
 ```bash
 #!/usr/bin/env bash
 export ASAN_OPTIONS="abort_on_error=0:halt_on_error=1:detect_leaks=0:symbolize=1:print_stacktrace=1"
@@ -75,13 +74,7 @@ export ASAN_SYMBOLIZER_PATH="$(command -v llvm-symbolizer || command -v addr2lin
 exec "$VULPINE_RUN/build/build-asan/sbin/<name>" "$@"
 ```
 
-### run-traced-<name>.sh
-
-Stage 5's per-feature reachability classification needs a dynamic
-function-call trace collected from the real daemon while it serves an
-attacker-flavoured request — NOT from a standalone library harness that
-re-implements the call site.
-
+`run-traced-<name>.sh`:
 ```bash
 #!/usr/bin/env bash
 export CPPFUNCTRACE_OUT="${CPPFUNCTRACE_OUT:-/tmp/$(basename "$0" .sh)-$$.ftrc}"
@@ -89,34 +82,22 @@ export CPPFUNCTRACE_TRACE_CHILDREN=1
 exec "$VULPINE_RUN/build/build-traced/sbin/<name>" "$@"
 ```
 
-`CPPFUNCTRACE_TRACE_CHILDREN=1` is mandatory for any daemon that
-forks a worker process per connection — without it the worker that
-actually handles the attacker request exits without flushing the
-trace buffer and you get nothing.
+`CPPFUNCTRACE_TRACE_CHILDREN=1` is mandatory for forking daemons —
+without it the request-handling worker exits without flushing.
 
-### Verify each wrapper
+Verify each wrapper runs (`--help` or equivalent). A wrapper that
+won't start is a stage-1 bug.
 
-Invoke it with `--help` or equivalent. The ASan wrapper should show
-a libasan-interposed startup and the normal help output; the traced
-wrapper should exit normally and leave a small `.ftrc` file at
-`$CPPFUNCTRACE_OUT`. A wrapper that won't start is a stage-1 bug.
-
-### Library-only targets
-
-For targets that ship library code only (no daemon, no CLI), emit
+**Library-only targets:** emit
 `run-{asan,traced}-harness-<libname>.sh` execing a ≤100-line C host
-program in `$VULPINE_RUN/build/src-host/` linking the upstream library
-via published headers. The host MUST NOT re-implement any upstream
+under `$VULPINE_RUN/build/src-host/` linking the upstream library via
+published headers. The host MUST NOT re-implement any upstream
 function.
 
-The container must:
-
-- Build from a base image that has `clang`, `clang++`, `gcc`, `g++`, `make`,
-  `cmake`, `ninja`, `bear`, `rr`, `gdb`, `libasan`, `libubsan`, `libtsan`, and
-  `python3`.
-- Install any dependencies listed by the target's own docs / CI.
-- Mount the source tree read-write at `/src` (so the host can edit).
-- Expose `/artifacts/` for gcov outputs, traces, and core files.
+Container requirements: `clang`, `clang++`, `gcc`, `g++`, `make`,
+`cmake`, `ninja`, `bear`, `rr`, `gdb`, `libasan`, `libubsan`,
+`libtsan`, `python3`, plus the target's own build deps. Source
+mounted r/w at `/src`; `/artifacts/` exposed for traces and cores.
 
 ## Approach
 
@@ -160,23 +141,9 @@ inline those flags from memory; the skill is the source of truth.
 
 ## Return value
 
-Write a single-paragraph summary to `$VULPINE_RUN/build/README.md` and
-return it as your final message. Include:
-
-- The build system detected.
-- Which sanitizer variants built cleanly.
-- **Enumerate every wrapper you emitted.** List each `run-asan-*.sh`
-  and each `run-traced-*.sh` by basename, and confirm each one runs
-  (invoke with `--help` or the target's equivalent no-op). If you
-  emitted zero network-facing daemon / CLI wrappers on a target that
-  ships them, that is a stage-1 bug — stage 5 and stage 7 fail
-  silently when wrappers are missing, producing either no findings or
-  library-harness-only findings. Verify:
-  ```bash
-  ls "$VULPINE_RUN"/build/run-asan-*.sh "$VULPINE_RUN"/build/run-traced-*.sh
-  ```
-  and state explicitly in the return message whether the target is
-  network-facing (and you emitted daemon wrappers), CLI-facing (and
-  you emitted CLI wrappers), or pure-library (and you emitted
-  `run-*-harness-<libname>.sh` instead).
-- Any dependency you had to pin.
+Write a single-paragraph summary to `$VULPINE_RUN/build/README.md`:
+build system detected, sanitizer variants that built cleanly, and
+classify the target as network-facing / CLI-facing / pure-library.
+**Enumerate every wrapper emitted** (`ls run-asan-*.sh
+run-traced-*.sh`), confirm each runs, and list dependencies pinned.
+Zero wrappers on a target with daemons/CLIs is a stage-1 bug.

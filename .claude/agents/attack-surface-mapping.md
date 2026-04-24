@@ -61,131 +61,82 @@ $VULPINE_RUN/features/
 
 For each feature `Fi` in `ATTACK_SURFACE.md`:
 
-1. Build a **deterministic** fuzzer. Deterministic = same output every run,
-   no RNG seeded from time, no network races. Preference order is strict —
-   do NOT drop to a lower preference when a higher one is available:
+1. Build a **deterministic** fuzzer. Preference order — do NOT drop
+   to a lower option when a higher one is available:
 
-   1. **Real daemon via `configure-target.sh --traced`** — if the target
-      ships a network-facing daemon or CLI and this feature's entry point
-      is reachable through it, THIS IS the fuzzer. `fuzz.sh` must:
-        - `./configure-target.sh --traced` to start the cppfunctrace-built
-          daemon in the background.
-        - Send the feature-specific request(s) through the real client
-          or protocol. Use whichever client tool matches the target's
-          protocol — a vendor-shipped CLI, a one-line Python client, a
-          `curl -X POST --data-binary @`, or `nc` piping raw bytes all
-          qualify. The choice is per-target; the requirement is that
-          bytes arrive at the daemon via its real network path.
-        - Wait for the daemon to process the request (a short sleep or a
-          client-side acknowledgement).
-        - SIGTERM the daemon so cppfunctrace flushes. `ftrc2perfetto` the
-          resulting `.ftrc` into `features/$feature/trace.ftrc` and
-          `trace.perfetto-trace`.
+   1. **Real daemon via `configure-target.sh --traced`** — if the
+      target ships a network-facing daemon reachable for this
+      feature. `fuzz.sh` starts the daemon in the background, sends
+      feature-specific bytes via a client that speaks the protocol,
+      waits, SIGTERMs the daemon to flush cppfunctrace, then
+      `ftrc2perfetto`s the `.ftrc` into `trace.ftrc` +
+      `trace.perfetto-trace`.
    2. **CLI entry point** — for CLI-only targets, run
       `run-traced-<name>.sh` with crafted stdin / argv / input file.
-   3. **Standalone library harness** — only acceptable when the target
-      ships no daemon and no CLI that exercises this feature. Compile a
-      one-file C program against `libcppfunctrace` + the upstream
-      library, feed it crafted input, collect the trace. The `fuzz.sh`
-      MUST state why options 1 and 2 were not applicable (typically:
-      "target is a pure library — the project ships no daemon and no
-      CLI tool"). If option 1 or 2 is available and the agent chose 3
-      anyway, that is a stage-5 bug.
+   3. **Standalone library harness** — only if the target ships no
+      daemon and no CLI. One-file C program linking
+      `libcppfunctrace` + the upstream library. `fuzz.sh` must state
+      why 1 and 2 weren't applicable.
 
-   Using option 3 when option 1 is available is a stage-5 bug. The
-   point of the trace is to see what the *deployed product* does when an
-   attacker pokes it, and that requires exercising the real daemon.
-   Agents who reach for a library harness because "it's easier" are
-   producing unfaithful traces that stage 6 and 7 cannot build on.
-2. Run the **same client invocation** against the coverage-instrumented
-   build (stage 1's `./build.sh coverage`) and collect `coverage.json` via
-   the `gcov-coverage` skill. Same daemon, same protocol, same crafted
-   input — only the binary profile differs.
-3. `trace.ftrc` is already produced in step 1 (option 1/2) by the
-   cppfunctrace run. If you used option 3, produce it here.
-4. Run a null invocation against the daemon (an empty / malformed
-   request that the feature's dispatch rejects at the first byte, so
-   the feature's code paths do NOT execute) and collect
-   `baseline.coverage.json`. Under options 1 and 2, "null invocation"
-   means starting the daemon and then shutting it down without sending
-   the feature-specific request.
-5. Derive `functions.txt` as:
+   Picking option 3 when 1 is available is a stage-5 bug: the
+   deployed product, not the library, is what we care about.
 
-   ```
-   functions = hit_by(Fi) \ hit_by(baseline)
-   ```
+2. Run the same invocation against the coverage build (stage 1's
+   `./build.sh coverage`); collect `coverage.json` via `gcov-coverage`.
+3. `trace.ftrc` is already produced in step 1 (option 1/2); under
+   option 3, produce it here.
+4. Run a null invocation (empty / first-byte-rejected request);
+   collect `baseline.coverage.json`.
+5. `functions.txt = hit_by(Fi) \ hit_by(baseline)`, then intersect
+   with `codenav reachable --from <Fi entry point>` to drop
+   unrelated executions.
+6. Sort `functions.txt` by importance: depth in callgraph × touches
+   attacker-controlled data × allocates / frees / memcpys / parses.
 
-   Then intersect with `codenav reachable --from <Fi entry point>` to drop
-   any functions that happen to execute for unrelated reasons.
-6. Sort `functions.txt` by a rough "how important to audit first" score:
-   prefer functions that are (a) deep in the callgraph, (b) touch
-   attacker-controlled data, (c) allocate / free / memcpy / parse.
+7. **Sanity-check the harness** (record in `sanity.json`):
 
-7. **MANDATORY: Sanity-check the harness empirically.** A coverage diff that
-   silently produces noise downstream is the worst failure mode of this stage.
-   Before declaring `Fi` mapped, verify ALL of the following and record the
-   results in `features/$feature/sanity.json`:
-
-   - **Entry-point hit:** the documented entry-point symbol(s) for `Fi` from
-     `ATTACK_SURFACE.md` MUST appear in both `coverage.json` and `trace.ftrc`.
-     If they do not, the fuzzer is exercising the wrong code path — fix it
-     before moving on. (Use `cppfunctrace`'s SQL interface to grep the trace.)
-   - **Non-trivial coverage delta:** `|hit_by(Fi)| - |hit_by(baseline)|` MUST
-     exceed a small threshold (default: 5 functions, or 1% of `|hit_by(Fi)|`,
-     whichever is larger). A delta below that means the baseline is hitting
-     the same code as the feature — tighten the baseline (use truly empty
-     input, or input the dispatch rejects at the very first byte).
-   - **Top-N spot check:** read the names of the top 10 functions in
-     `functions.txt`. For each, write one sentence in `sanity.json` explaining
-     why it plausibly belongs to `Fi`. If you cannot, the function-set is
-     contaminated — investigate.
-
-   `sanity.json` shape:
+   - **Entry-point hit:** the documented entry-point symbol(s) from
+     `ATTACK_SURFACE.md` appear in `coverage.json` AND `trace.ftrc`.
+     If not, the fuzzer is wrong — fix it.
+   - **Non-trivial delta:** `|hit_by(Fi)| - |hit_by(baseline)|` ≥ 5
+     functions (or 1% of `|hit_by(Fi)|`, whichever is larger). Below
+     that → baseline is hitting feature code; tighten it.
+   - **Top-N spot check:** top 10 symbols in `functions.txt`, one
+     sentence each in `sanity.json` justifying membership.
 
    ```json
    {
-     "entry_points_seen":   ["http2_frame_dispatch", "h2_priority_handle"],
+     "entry_points_seen":   ["frame_dispatch", "priority_handle"],
      "entry_points_missing": [],
      "coverage_delta":       142,
      "baseline_size":        318,
      "feature_size":         460,
      "top_n_justifications": [
-       {"symbol": "h2_priority_handle", "reason": "documented entry point for PRIORITY frames"},
-       {"symbol": "h2_stream_lookup",   "reason": "called from priority handler to resolve stream id"},
-       ...
+       {"symbol": "priority_handle", "reason": "documented entry point"},
+       {"symbol": "stream_lookup",   "reason": "called from priority handler"}
      ]
    }
    ```
 
-   If any of these checks fails, do NOT fan out a function-auditor for `Fi`
-   — record the failure in `SUMMARY.md` and move on.
+   If any check fails, don't dispatch function-auditor for `Fi` —
+   record in `SUMMARY.md` and skip.
 
-8. **HARD GATE: run `$VULPINE_ROOT/tools/validate-feature.sh` per feature,
-   in-turn, before moving on.** The spec wording above is necessary but not
-   sufficient — past runs showed agents repeatedly skipping the daemon
-   trace even when `configure-target.sh --traced` was available. The
-   validator closes that loophole mechanically.
+8. **HARD GATE — run `validate-feature.sh` per feature, in turn.**
 
    ```bash
    $VULPINE_ROOT/tools/validate-feature.sh features/$feature/
    ```
 
-   The gate checks: `fuzz.sh`, `functions.txt`, `coverage.json`,
-   `baseline.coverage.json`, `sanity.json` non-empty; `sanity.json`'s
-   `entry_points_seen` non-empty, `coverage_delta ≥ 5`,
-   `top_n_justifications` populated; AND — if the target ships a daemon
-   (detected via `$VULPINE_RUN/build/run-traced-<name>.sh`, excluding
-   `run-traced-harness-*.sh`) — `trace.ftrc` and `trace.perfetto-trace`
-   non-empty. A feature that fails the gate must be fixed or explicitly
-   marked skipped; do NOT dispatch function-auditor on a failing
-   feature.
+   Checks: the artefacts in step 7 non-empty; `sanity.json`
+   invariants; `trace.ftrc` + `trace.perfetto-trace` non-empty if
+   the target ships a daemon (detected via `run-traced-*.sh`
+   excluding `run-traced-harness-*.sh`). A failing feature must be
+   fixed or explicitly marked skipped.
 
-   Before returning from stage 5, also run the `--all` sweep:
+   Before returning, also run `--all`:
    ```bash
    $VULPINE_ROOT/tools/validate-feature.sh --all $VULPINE_RUN/features
    ```
-   The orchestrator checks this too; if the pass rate is low, stage 6
-   will be blocked pending remediation.
 
 Once all features are mapped, write `SUMMARY.md`.
 
