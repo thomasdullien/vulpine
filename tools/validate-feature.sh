@@ -49,9 +49,11 @@ validate_one() {
     # ---- Daemon-trace requirement. ---------------------------------
     if has_daemon "$run"; then
         [ -s "$dir/trace.ftrc" ] \
-            || { fail "$feat" "target ships a daemon (run-traced-*.sh in build/) but features/$feat/trace.ftrc is missing or empty. Use 'configure-target.sh --traced' to capture it."; return 1; }
+            || { fail "$feat" "target ships a daemon but features/$feat/trace.ftrc is missing/empty (use configure-target.sh --traced)."; return 1; }
         [ -s "$dir/trace.perfetto-trace" ] \
-            || { fail "$feat" "trace.ftrc present but trace.perfetto-trace missing. Run 'ftrc2perfetto trace.ftrc -o trace.perfetto-trace'."; return 1; }
+            || { fail "$feat" "missing trace.perfetto-trace (run ftrc2perfetto)."; return 1; }
+        [ -s "$dir/trace.txt" ] \
+            || { fail "$feat" "missing trace.txt — stage 7 greps this for call-context. Generate via the cppfunctrace skill's text-export."; return 1; }
     fi
 
     # ---- Sanity.json invariants. ---------------------------------

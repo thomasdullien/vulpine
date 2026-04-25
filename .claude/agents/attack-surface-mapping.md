@@ -50,6 +50,8 @@ $VULPINE_RUN/features/
 │   ├── coverage.json           # gcov output for the feature
 │   ├── baseline.coverage.json  # gcov output for a null invocation
 │   ├── trace.ftrc              # cppfunctrace binary trace
+│   ├── trace.perfetto-trace    # SQL-queryable form via trace_processor_shell
+│   ├── trace.txt               # one ENTER/EXIT event per line: ts thread depth ENTER|EXIT symbol
 │   ├── functions.txt           # sorted list of functions uniquely associated with the feature
 │   └── sanity.json             # harness sanity-check results (coverage delta, top-N justifications)
 ├── F2-<slug>/
@@ -68,9 +70,12 @@ For each feature `Fi` in `ATTACK_SURFACE.md`:
       target ships a network-facing daemon reachable for this
       feature. `fuzz.sh` starts the daemon in the background, sends
       feature-specific bytes via a client that speaks the protocol,
-      waits, SIGTERMs the daemon to flush cppfunctrace, then
-      `ftrc2perfetto`s the `.ftrc` into `trace.ftrc` +
-      `trace.perfetto-trace`.
+      waits, SIGTERMs the daemon to flush cppfunctrace, then converts
+      the `.ftrc` into BOTH `trace.perfetto-trace` (via `ftrc2perfetto`)
+      AND `trace.txt` (via the cppfunctrace skill's text-export — one
+      line per entry/exit: `ts thread depth ENTER|EXIT symbol`).
+      `trace.txt` is what stage 7 greps for context; the Perfetto form
+      is for power-user SQL queries.
    2. **CLI entry point** — for CLI-only targets, run
       `run-traced-<name>.sh` with crafted stdin / argv / input file.
    3. **Standalone library harness** — only if the target ships no

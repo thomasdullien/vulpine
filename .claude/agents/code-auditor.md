@@ -205,6 +205,26 @@ One paragraph — enough that a maintainer could write the patch.
 6. **Per-issue subagents.** Non-trivial harnesses → Agent tool,
    output under `issues/NNN/harness/`.
 
+### Stage-5 call trace for context
+
+`features/<F>/trace.txt` is the ordered call graph from the real
+daemon serving the feature's seeds — one line per ENTER/EXIT,
+columns `ts thread depth ENTER|EXIT symbol`. Grep it for what called
+the vulnerable function in the actual run:
+
+```bash
+# what was on the stack right before <vuln-fn> fired:
+grep -n -B 20 'ENTER  <vuln-fn>$' features/<F>/trace.txt | tail -25
+# what immediately calls <vuln-fn> (one level up):
+awk -v t='<vuln-fn>' '$5=="ENTER" && $6==t {print prev} {prev=$0}' \
+    features/<F>/trace.txt | sort -u
+```
+
+That tells you which public-facing function brackets the vulnerable
+one in time — pick that as the entry for `rr record` so the taint
+walk has a tractable starting depth. `trace.perfetto-trace` is also
+available if you want to write a SQL query instead.
+
 ### Taint-chain workflow (MANDATORY for Evidence layer: application)
 
 Prove via `rr` that the suspect parameter's value actually derives
