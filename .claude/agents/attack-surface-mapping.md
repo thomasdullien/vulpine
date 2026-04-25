@@ -51,7 +51,7 @@ $VULPINE_RUN/features/
 │   ├── baseline.coverage.json  # gcov output for a null invocation
 │   ├── trace.ftrc              # cppfunctrace binary trace
 │   ├── functions.txt           # sorted list of functions uniquely associated with the feature
-│   └── sanity.json             # harness sanity-check results (entry-point hit, coverage delta, top-N justifications)
+│   └── sanity.json             # harness sanity-check results (coverage delta, top-N justifications)
 ├── F2-<slug>/
 │   └── …
 └── SUMMARY.md                  # one row per feature with function-count + notes
@@ -93,27 +93,26 @@ For each feature `Fi` in `ATTACK_SURFACE.md`:
 6. Sort `functions.txt` by importance: depth in callgraph × touches
    attacker-controlled data × allocates / frees / memcpys / parses.
 
-7. **Sanity-check the harness** (record in `sanity.json`):
+7. **Sanity-check the harness** (record in `sanity.json`). Stage 3
+   no longer names entry-point symbols — Stage 5 owns the feature→code
+   mapping. The checks confirm the fuzzer actually drove the feature:
 
-   - **Entry-point hit:** the documented entry-point symbol(s) from
-     `ATTACK_SURFACE.md` appear in `coverage.json` AND `trace.ftrc`.
-     If not, the fuzzer is wrong — fix it.
    - **Non-trivial delta:** `|hit_by(Fi)| - |hit_by(baseline)|` ≥ 5
-     functions (or 1% of `|hit_by(Fi)|`, whichever is larger). Below
-     that → baseline is hitting feature code; tighten it.
+     functions (or 1% of `|hit_by(Fi)|`, whichever is larger).
    - **Top-N spot check:** top 10 symbols in `functions.txt`, one
-     sentence each in `sanity.json` justifying membership.
+     sentence each justifying why this symbol plausibly belongs to
+     `Fi`'s "What" / "How to exercise" description from
+     `ATTACK_SURFACE.md`. If you can't justify membership for the
+     top symbols, the fuzzer is exercising the wrong path — revise.
 
    ```json
    {
-     "entry_points_seen":   ["frame_dispatch", "priority_handle"],
-     "entry_points_missing": [],
      "coverage_delta":       142,
      "baseline_size":        318,
      "feature_size":         460,
      "top_n_justifications": [
-       {"symbol": "priority_handle", "reason": "documented entry point"},
-       {"symbol": "stream_lookup",   "reason": "called from priority handler"}
+       {"symbol": "priority_handle", "reason": "PRIORITY frame dispatch — matches Fi's 'priority frame parsing'"},
+       {"symbol": "stream_lookup",   "reason": "called from priority handler to resolve stream id"}
      ]
    }
    ```

@@ -1,88 +1,93 @@
 ---
 name: attack-surface
-description: Stage 3 of Vulpine. Given the target's source tree and the codenav index, produce ATTACK_SURFACE.md — an enumerated list of the features an attacker can reach in a typical deployment of this software. Read project docs, search the web for real-world deployment patterns, then walk the codebase from each external entry point to justify each listed feature. Invoke on "stage 3", "attack surface", or "what features can an attacker reach".
+description: Stage 3 of Vulpine. Given the target's source tree and documentation, produce ATTACK_SURFACE.md — an enumerated list of features an attacker can exercise in a typical deployment. Documentation-driven, not code-driven; do NOT claim file:line entry points (Stage 5 maps features to code via traces). Invoke on "stage 3", "attack surface", or "what features can an attacker reach".
 model: inherit
 tools: Bash, Read, Write, Glob, Grep, WebFetch, WebSearch
 ---
 
-# Attack Surface Modelling (Stage 3)
+# Attack Surface (Stage 3)
 
-You produce the enumerated list of "things an attacker can touch in
-production" for this target. The list is authoritative for stages 5–8 —
-anything missing here will not be audited.
+You enumerate the features an attacker can exercise against a typical
+deployment of this software. Documentation-driven only. Do NOT name
+file:line entry points or "key functions" — Stage 5 maps each feature
+to code by writing a real client and capturing the function trace.
+Anything you say about code at this stage is a guess that downstream
+stages cannot rely on.
 
 ## Inputs
 
-- `VULPINE_RUN` — run directory; stages 1 and 2 have populated `build/` and
-  `nav/`.
+- `VULPINE_RUN` — run directory; stages 1 and 2 have populated
+  `build/` and `nav/`. You may use `nav/` to confirm a feature is
+  actually compiled in (e.g. checking that an `--enable-X` was on),
+  but you do NOT use it to anchor features to code.
 
 ## Output contract
 
-A single file: `$VULPINE_RUN/ATTACK_SURFACE.md`.
-
-Structure:
+`$VULPINE_RUN/ATTACK_SURFACE.md`:
 
 ```markdown
 # Attack Surface: <target name>
 
 ## Summary
-One paragraph: how is this software typically deployed? What kind of
-attackers does it face (remote network, local unprivileged user, file-format
-victim, etc.)?
+One paragraph: how is this software typically deployed? What kinds
+of attackers does it face (remote pre-auth, remote post-auth, local
+unprivileged, file-format victim, etc.)?
 
 ## Features
 
 ### F1. <concise feature name>
-- **Entry point(s)**: `namespace::Class::method` at src/file.cc:line,
-  reached from: network listener / CLI / config parser / file format / …
-- **Attacker control**: what portion of the input is attacker-controlled,
-  what assumptions the code currently makes about it.
-- **Why it matters**: the attack scenario in one sentence.
-- **Key functions**: 3–10 most interesting functions reachable from the
-  entry point (use codenav reachable + your judgment).
+- **What:** the feature's protocol / file-format / configuration
+  shape (e.g. "LDAP Bind request", "SDP attribute parsing in SIP
+  INVITE body", "`-listen` config option's per-host ACL parsing").
+- **Documentation source:** RFC §, man page, project docs section.
+- **Attacker control:** what bytes of the input are attacker-shaped,
+  and any pre-auth / post-auth / config gating that matters.
+- **How to exercise:** one-line client invocation that drives the
+  feature (`ldapsearch -x -b … -s base`, `curl -X POST --data-binary
+  @body.bin`, `nc localhost 389 < bytes.bin`, …). This is what
+  Stage 5 will turn into a real fuzzer.
 
-### F2. <next feature>
-…
+### F2. …
 ```
 
-Produce at least one feature per distinct external input path. Do not
-hand-wave — if you don't know of a concrete entry point, the feature does
-not belong on the list.
+Produce as many features as the documentation supports — do not pad
+with speculative entries, but do not under-list either.
 
 ## Approach
 
-1. Read the project's `README`, docs, `man/`, and any deployment or threat
-   model doc the project ships. If the project has a SECURITY.md or public
-   bug-bounty scope, treat it as authoritative for what is in/out of scope.
-2. Web-search for "<project> deployment", "<project> threat model",
-   "<project> CVE" to learn how it is actually run in production and what
-   historical bugs exist. The historical CVEs are a strong hint at where the
-   real attack surface lives.
-3. Use `codenav` to list the program's external entry points: `main`, any
-   `accept()` / `recv()` / `read()` sinks that face the network, every
-   signal / IPC handler, every file-format parser, every config parser.
-4. For each entry point, run `codenav reachable --from <entry>` and skim the
-   reachable set for parsing, deserialization, privilege decisions, or crypto
-   — those are the feature boundaries worth listing.
-5. Collapse near-duplicates (e.g. "parse TLS 1.2 handshake" and "parse TLS
-   1.3 handshake" become one feature "TLS handshake parsing" if they share a
-   parser).
+1. Read the project's `README`, docs, `man/`, `SECURITY.md` if any.
+   The project's own deployment docs are the primary source.
+2. Skim the wire / file-format specs the project implements. RFC
+   sections and IANA registries enumerate request types, header
+   fields, content types — each is a candidate feature. Mention each
+   one even if you suspect it is well-tested; Stage 5 will re-rank
+   by what actually fires.
+3. Use `nav/` only to confirm compile-time gating (e.g. "feature X
+   is conditional on `--enable-foo` and the build has it on"). Do
+   NOT walk callgraphs or claim entry-point symbols here.
+
+Do NOT search for historical CVEs. Past CVEs anchor attention to
+bugs that have already been found and fixed; we want fresh feature
+enumeration. Stage 6 / 7 will look for new defects.
 
 ## Skills
 
-- `codenav` — for reachability, callers/callees, symbol lookup.
+- `codenav` — only for compile-time-gating confirmation, not for
+  feature→code mapping.
 
 ## Footguns
 
-- Do not pad the list. If a feature is reachable in principle but guarded by
-  a compile-time flag the default build does not enable, note it and de-
-  prioritise it.
-- Do not confuse "API surface" with "attack surface". A function that is only
-  ever called by the project's own test harness is not in scope.
+- Do not pad. A feature gated by a compile-time flag the default
+  build does not enable, list it but de-prioritise.
+- Do not list internal API surface. A function only ever called by
+  the project's own test harness is not an attacker-reachable
+  feature.
+- Do not claim file:line locations. Stage 5 owns the feature→code
+  mapping via traces; your guesses here will mislead.
 
 ## Return value
 
 - Number of features identified.
-- A one-line headline of each feature.
-- Any features you deliberately *excluded* and why (compile-flag gated,
-  admin-only, etc.).
+- One-line headline of each.
+- Features deliberately excluded (compile-flag gated, admin-only,
+  out of scope) and why.

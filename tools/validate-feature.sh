@@ -55,7 +55,7 @@ validate_one() {
     fi
 
     # ---- Sanity.json invariants. ---------------------------------
-    # entry_points_seen non-empty; coverage_delta > 0; top_n_justifications populated.
+    # coverage_delta ≥ 5; top_n_justifications populated.
     local sj="$dir/sanity.json"
     python3 - "$sj" "$feat" <<'PY' || return 1
 import json, sys
@@ -64,9 +64,6 @@ try:
     d = json.loads(open(sj_path).read())
 except Exception as e:
     print(f"FAIL [{feat}]: sanity.json unparseable: {e}", file=sys.stderr)
-    sys.exit(1)
-if not d.get("entry_points_seen"):
-    print(f"FAIL [{feat}]: sanity.json entry_points_seen is empty — fuzzer did not reach the feature's documented entry point", file=sys.stderr)
     sys.exit(1)
 if d.get("coverage_delta", 0) < 5:
     print(f"FAIL [{feat}]: sanity.json coverage_delta={d.get('coverage_delta')} is below the 5-function floor — baseline is hitting the same code as the feature", file=sys.stderr)
