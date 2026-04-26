@@ -26,6 +26,36 @@ test -s "$VULPINE_RUN/features/$feature/coverage.json" \
     || { echo "stage 5 did not emit coverage.json for $feature"; exit 1; }
 ```
 
+## Tool discipline (read FIRST)
+
+**Use `codenav` for code navigation. Do NOT use `Read` or `Grep` to
+look up a function body, enumerate callers, or walk the callgraph.**
+Those substitutes return the wrong precision and cost more tokens
+overall (Grep then Read = two calls returning many surrounding lines;
+`codenav body` = one call, bounded to the function).
+
+Canonical lookups:
+
+| Need                | Use this                                       |
+|---------------------|------------------------------------------------|
+| function body       | `codenav body <sym>`                           |
+| callers             | `codenav callers <sym>`                        |
+| callees             | `codenav callees <sym>`                        |
+| reachability        | `codenav reachable --from <anc> --to <sym>`    |
+| body_sha for audit  | `codenav body <sym> \| sha256sum`              |
+
+If `codenav` returns nothing for a symbol that is itself useful
+signal — the symbol is virtual, templated, ambiguous, or unindexed.
+Skip the function to `skipped.txt` with reason `symbol unresolved`.
+Do NOT fall back to Read+Grep — downstream stages (code-auditor,
+exploit-developer) thread `body_sha` / `callers_count` /
+`reach_evidence` between them; an entry built from Read+Grep
+doesn't carry those, the stage-7 worklist deprioritises it, and
+the audit work is wasted.
+
+Read / Grep / Glob remain fine for non-code data: project docs,
+config files, build logs, wire-format spec text.
+
 ## Audit budget — depth over breadth
 
 **At most 10 fnaudit rows per feature, per dispatch.** If
