@@ -72,7 +72,7 @@ find "$SRC" -maxdepth 4 -type f -perm -111 \
 # silently fall back to Read+Grep when the skill-relative invocation
 # returns "command not found" (which they often hide behind 2>/dev/null).
 mkdir -p "$HOME/.local/bin"
-for tool in codenav line-checker trace_to_perfetto; do
+for tool in codenav line-checker ftrc2perfetto; do
     src=$(find "$SRC" -maxdepth 4 -type f -perm -111 -name "$tool" 2>/dev/null | head -1)
     [[ -n "$src" ]] && ln -sf "$src" "$HOME/.local/bin/$tool"
 done
