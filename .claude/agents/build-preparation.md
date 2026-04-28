@@ -52,11 +52,10 @@ python3 -m venv "$VULPINE_RUN/build/venv"
 `vulpine/scripts/install-tools.sh` already follows this pattern for
 fnaudit; re-use it for any other Python dependency you need to install.
 
-Host may have podman instead of docker. Use
-`CONTAINER=$(command -v podman || command -v docker)` and invoke via
-`"$CONTAINER"` — never hard-code `docker`. Also verify `xxd`, `nc`,
-`jq`, `sqlite3`, `bear`, `rr`, `gdb`, `llvm-symbolizer` are on PATH;
-missing any → list in the return value.
+Verify `xxd`, `nc`, `jq`, `sqlite3`, `bear`, `rr`, `gdb`,
+`llvm-symbolizer` are on PATH; missing any → list in the return
+value. (`docker` is wired to whichever engine the host runs by
+`install-tools.sh`; just call `docker`.)
 
 ## Runnable wrappers (MANDATORY: ASan + traced)
 

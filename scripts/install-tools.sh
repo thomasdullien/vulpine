@@ -77,4 +77,11 @@ for tool in codenav line-checker ftrc2perfetto; do
     [[ -n "$src" ]] && ln -sf "$src" "$HOME/.local/bin/$tool"
 done
 
+# If the host has podman but no docker, alias `docker` -> `podman` so the
+# spec / agent prompts can refer to docker generically without each one
+# growing a "detect podman vs docker" preamble.
+if ! command -v docker >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; then
+    ln -sf "$(command -v podman)" "$HOME/.local/bin/docker"
+fi
+
 echo "[vulpine] Done. Repos under $SRC/, binaries/symlinks in $BIN/ and \$HOME/.local/bin/."
