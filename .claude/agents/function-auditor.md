@@ -188,9 +188,15 @@ Read the `fnaudit` skill's SKILL.md before writing entries. Schema fields:
       `"reach_attempts": 2, "reason": "fuzzer extension did not
       reach"`. No harness shortcut.
 
-3. **Audit Tier-A symbols (incl. promoted Tier B).** `intent` =
-   what the programmer wants (from name, comments, call sites).
-   Look for discrepancies:
+3. **Audit Tier-A symbols (incl. promoted Tier B).** Read
+   `$VULPINE_ROOT/tools/example-traces/strarray2str.trace.md` once
+   before your first audit — it is the shape of reasoning we want:
+   walk the body line-by-line, annotate running state with `//!`,
+   note types explicitly (e.g. `size_t buflen - 5` underflows when
+   `buflen < 5`), end with the reachability question that ties the
+   finding to stage 7 ("can an attacker drive this parameter?").
+   `intent` = what the programmer wants (from name, comments, call
+   sites). Look for discrepancies:
    - integer overflow / sign mismatch / promotion flip
    - arithmetic before allocation producing surprising sizes
    - variable-length reads/writes where byte count ≠ arg (N=0 edge)
