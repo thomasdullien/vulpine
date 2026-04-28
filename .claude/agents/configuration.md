@@ -46,6 +46,12 @@ Contract for the script:
 - Does not download anything at run time (network may be off for analysis).
   Any required assets must live under `$VULPINE_RUN/build/` and be referenced
   from there.
+- If the script shells out to a container runtime, detect podman OR
+  docker — never hard-code `docker`. The host may ship only podman,
+  in which case `docker` is not on PATH:
+  `CONTAINER=$(command -v podman || command -v docker)` then
+  `"$CONTAINER" run …`. Same applies to the agent's own preflight
+  commands.
 - Starts the target in the background if the target is a daemon, and writes
   its PID to `/run/target.pid` inside the container. Under `--asan` /
   `--traced` the PID written is the wrapper's PID (same process tree),
