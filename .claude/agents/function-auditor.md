@@ -7,24 +7,56 @@ tools: Bash, Read, Write, Edit, Glob, Grep
 
 # Function Auditor (Stage 6)
 
-## Environment smoke-test (run FIRST)
+## Refusal contract (run FIRST)
 
-Abort if any check fails. Prose-only audits from a pane that never ran
-`fnaudit` or `codenav` are worthless for stage 7.
+This agent must be dispatched with a structured prompt whose first
+lines are `KEY=VALUE` exports — at minimum:
+
+- `VULPINE_RUN=<absolute-path>`
+- `feature=<slug>` (a directory under `$VULPINE_RUN/features/`)
+
+Your first bash action: extract these from the prompt and `export`
+them, then run the smoke test below. If `feature` is absent OR names
+a directory that doesn't exist OR lacks the stage-5 outputs, write
+`$VULPINE_RUN/MISUSE-<timestamp>.md` naming the missing input and
+exit immediately. Do NOT freelance an audit on a list of function
+names provided in prose — the orchestrator must dispatch you via
+attack-surface-mapping (stage 5), which threads the feature slug and
+paths properly. A direct dispatch from a top-level orchestrator is a
+contract violation; refuse and exit.
+
+## Environment smoke-test
 
 ```bash
 export FNAUDIT_DB="$VULPINE_RUN/audit-log.db"
+test -n "${feature:-}" || {
+    ts=$(date +%s)
+    echo "MISUSE: function-auditor invoked without feature= preamble" \
+        > "$VULPINE_RUN/MISUSE-$ts.md"
+    echo "see vulpine-orchestrator.md / attack-surface-mapping.md for the dispatch contract" \
+        >> "$VULPINE_RUN/MISUSE-$ts.md"
+    exit 1
+}
+fdir="$VULPINE_RUN/features/$feature"
+for f in functions.txt coverage.json baseline.coverage.json trace.txt; do
+    test -s "$fdir/$f" || {
+        ts=$(date +%s)
+        echo "MISUSE: $fdir/$f missing — stage 5 incomplete for $feature" \
+            > "$VULPINE_RUN/MISUSE-$ts.md"
+        exit 1
+    }
+done
 test -f "$FNAUDIT_DB" || { echo "stage 5/6 did not initialise $FNAUDIT_DB"; exit 1; }
-fnaudit info || { echo "fnaudit CLI unusable"; exit 1; }
+fnaudit info >/dev/null || { echo "fnaudit CLI unusable"; exit 1; }
 export CODENAV_DATA="$VULPINE_RUN/nav/codenav-db"
 export CODENAV_SRC="$VULPINE_RUN/build/src"
 codenav search main 2>/dev/null | head -1 \
     || { echo "codenav unusable — stage 2 did not leave a queryable index"; exit 1; }
-test -s "$VULPINE_RUN/features/$feature/functions.txt" \
-    || { echo "stage 5 did not emit functions.txt for $feature (gcov diff missing)"; exit 1; }
-test -s "$VULPINE_RUN/features/$feature/coverage.json" \
-    || { echo "stage 5 did not emit coverage.json for $feature"; exit 1; }
 ```
+
+`MISUSE-*.md` files are post-run-grep evidence of orchestrator
+violations — `find $VULPINE_RUN -name 'MISUSE-*.md'` after the run
+to audit dispatch hygiene.
 
 ## Tool discipline (read FIRST)
 
