@@ -14,7 +14,8 @@ mkdir -p "$SRC" "$BIN"
 clone_or_pull() {
     local url="$1" dir="$2"
     if [[ -d "$dir/.git" ]]; then
-        git -C "$dir" pull --ff-only
+        git -C "$dir" fetch origin
+        git -C "$dir" reset --hard @{upstream} 2>/dev/null || git -C "$dir" reset --hard origin/HEAD
     else
         git clone "$url" "$dir"
     fi
@@ -65,4 +66,15 @@ find "$SRC" -maxdepth 4 -type f -perm -111 \
     \( -name 'codenav' -o -name 'cppfunctrace*' -o -name 'line-checker' -o -name 'trace_to_perfetto' \) \
     -exec ln -sf {} "$BIN/" \; 2>/dev/null || true
 
-echo "[vulpine] Done. Repos under $SRC/, binaries/symlinks in $BIN/."
+# Also symlink into ~/.local/bin so the binaries are on the default PATH
+# (same place fnaudit lands above). Bake-off agents tend to invoke bare
+# `codenav` rather than `${CLAUDE_SKILL_DIR}/codenav`; without this they
+# silently fall back to Read+Grep when the skill-relative invocation
+# returns "command not found" (which they often hide behind 2>/dev/null).
+mkdir -p "$HOME/.local/bin"
+for tool in codenav line-checker trace_to_perfetto; do
+    src=$(find "$SRC" -maxdepth 4 -type f -perm -111 -name "$tool" 2>/dev/null | head -1)
+    [[ -n "$src" ]] && ln -sf "$src" "$HOME/.local/bin/$tool"
+done
+
+echo "[vulpine] Done. Repos under $SRC/, binaries/symlinks in $BIN/ and \$HOME/.local/bin/."
