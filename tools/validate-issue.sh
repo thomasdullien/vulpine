@@ -30,17 +30,28 @@ extract_status() {
   | head -1
 }
 
-# ---------- Extract the single-word severity from "## Severity". -------------
+# ---------- Extract the single-word severity. Accepts:
+#   ## Severity\nMedium\n
+#   ## Severity: Medium
+#   **Severity:** Medium
+#   Severity: Medium
 extract_severity() {
-  awk '
-    /^## Severity/ {in_s=1; next}
+  local v
+  # Heading form (value may be on heading line after a colon, OR on next line).
+  v=$(awk '
+    /^## Severity[: ]/ {in_s=1; print; next}
+    /^## Severity$/   {in_s=1; next}
     in_s && /^## / {exit}
     in_s {print}
   ' "$1" \
-  | tr -d '* ' \
-  | tr A-Z a-z \
-  | grep -oE 'critical|high|medium|low' \
-  | head -1
+  | tr -d '*:' | tr A-Z a-z \
+  | grep -oE 'critical|high|medium|low' | head -1)
+  if [ -z "$v" ]; then
+    # Inline form: **Severity:** <v>  or  Severity: <v>
+    v=$(grep -m1 -oiE '(\*\*)?Severity:?(\*\*)?[[:space:]]+(critical|high|medium|low)' "$1" \
+        | tr A-Z a-z | grep -oE 'critical|high|medium|low' | head -1)
+  fi
+  echo "$v"
 }
 
 # ---------- Detect whether the report talks about a memory-corruption bug. ---
