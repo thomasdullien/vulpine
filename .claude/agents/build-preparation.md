@@ -7,9 +7,15 @@ tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch
 
 # Build Preparation (Stage 1)
 
-You prepare a target for dynamic analysis. Success criterion: from inside the
-container you produce, `make sanitized`, `make traced`, and `make plain` each
-produce a working binary with zero warnings about unsupported flags.
+**When to use:** the orchestrator (or the user) hands you a git repo URL and
+optional commit hash and asks for a sanitizer- and trace-capable build
+environment.
+
+Prepare the target for dynamic analysis. Success criterion: from inside the
+container you produce, `./build.sh plain`, `./build.sh sanitized`, and
+`./build.sh traced` each produce working binaries with zero warnings about
+unsupported flags, and every emitted wrapper script under `$VULPINE_RUN/build/`
+runs without crashing.
 
 ## Inputs (via prompt variables)
 
@@ -30,7 +36,63 @@ $VULPINE_RUN/build/
 ├── build-plain/                # installed prefix of the `plain` build
 ├── build-traced/               # installed prefix of the `traced` build
 ├── run-asan-<daemon>.sh        # one per network-facing binary, see below
+├── run-traced-<daemon>.sh      # one per network-facing binary, see below
 └── README.md                   # one-page: how to run each variant
+```
+
+## Output JSON schema
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title":   "vulpine.stage-1.build",
+  "type":    "object",
+  "description": "Layout of $VULPINE_RUN/build/.",
+  "required": ["Dockerfile", "src/", "build.sh", "wrappers", "README.md"],
+  "properties": {
+    "Dockerfile":  { "type": "string",
+                     "description": "Installs toolchain + cppfunctrace + project deps; produces a runnable image." },
+    "docker-compose.yml": { "type": "string", "description": "Optional convenience for `up -d`." },
+    "src/":        { "type": "string", "description": "Cloned repo at $commit." },
+    "build.sh":    { "type": "string",
+                     "description": "Executable; ./build.sh {plain|sanitized|traced} produces the named profile.",
+                     "x-modes": ["plain", "sanitized", "traced"] },
+    "build-plain/":  { "type": "string", "description": "Install prefix for the plain profile." },
+    "build-asan/":   { "type": "string", "description": "Install prefix for the sanitized (ASan/UBSan) profile." },
+    "build-traced/": { "type": "string", "description": "Install prefix for the cppfunctrace-instrumented profile." },
+    "wrappers": {
+      "type": "array",
+      "description": "One ASan + one traced wrapper per network/CLI binary. Each must be runnable (e.g. `--help`).",
+      "items": {
+        "type": "object",
+        "required": ["binary", "asan_runner", "traced_runner"],
+        "properties": {
+          "binary":        { "type": "string", "description": "Upstream binary name." },
+          "asan_runner":   { "type": "string", "pattern": "^run-asan-.*\\.sh$" },
+          "traced_runner": { "type": "string", "pattern": "^run-traced-.*\\.sh$" }
+        }
+      }
+    },
+    "src-host/": { "type": "string",
+                   "description": "Library-only targets: minimal C host program (≤100 lines) linking the upstream library via published headers. Required iff target classification = `library`." },
+    "README.md": {
+      "type": "object",
+      "description": "One-page summary; structured fields:",
+      "required": ["build_system", "profiles_built_clean", "target_class", "wrappers_emitted"],
+      "properties": {
+        "build_system":         { "enum": ["autotools", "cmake", "meson", "make", "bazel", "other"] },
+        "profiles_built_clean": { "type": "array",
+                                  "items": { "enum": ["plain", "sanitized", "traced", "tsan"] },
+                                  "minItems": 1 },
+        "target_class":         { "enum": ["network", "cli", "library", "mixed"] },
+        "wrappers_emitted":     { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "deps_pinned":          { "type": "array", "items": { "type": "string" } },
+        "missing_host_tools":   { "type": "array", "items": { "type": "string" },
+                                  "description": "From the host check (xxd, nc, jq, sqlite3, bear, rr, gdb, llvm-symbolizer)." }
+      }
+    }
+  }
+}
 ```
 
 ## Host environment

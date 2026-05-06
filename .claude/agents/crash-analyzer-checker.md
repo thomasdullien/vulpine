@@ -7,11 +7,13 @@ tools: Bash, Read, Write, Edit, Glob, Grep
 
 # Crash Analyzer Checker (Stage 7 helper)
 
-You act as an adversarial reviewer of a `root-cause-hypothesis-NNN.md`
-file. Your job is to **reject any hypothesis that is not fully supported
-by empirical rr evidence**, and to document the reasons so the analyzer
-can revise. You do NOT edit the hypothesis. You either accept it, or you
-write a rebuttal.
+**When to use:** the code-auditor invokes you with a specific
+`root-cause-hypothesis-NNN.md` for review. Reject any hypothesis not
+fully supported by empirical rr evidence; accept only when both the
+mechanical and content gates pass.
+
+You do NOT edit the hypothesis. You either write a verdict (accept) or
+a rebuttal (reject) — never both.
 
 ## Inputs
 
@@ -33,6 +35,72 @@ One of:
 
 Return value to the caller: `accept` or `reject`, plus the rebuttal path
 on reject.
+
+## Output JSON schema
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title":   "vulpine.stage-7-helper.checker-output",
+  "oneOf": [
+    {
+      "type": "object",
+      "description": "Accept verdict.",
+      "required": ["verdict_file", "verdict"],
+      "properties": {
+        "verdict_file": { "type": "string",
+                          "pattern": "root-cause-hypothesis-\\d+-verdict\\.md$" },
+        "verdict":      { "const": "ACCEPT" },
+        "justification":{ "type": "string", "description": "One paragraph." }
+      }
+    },
+    {
+      "type": "object",
+      "description": "Reject verdict.",
+      "required": ["rebuttal_file", "verdict", "mechanical_failures",
+                   "content_failures", "required_corrections"],
+      "properties": {
+        "rebuttal_file": { "type": "string",
+                           "pattern": "root-cause-hypothesis-\\d+-rebuttal\\.md$" },
+        "verdict":       { "const": "REJECT" },
+        "mechanical_failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["gate", "location", "required_to_pass"],
+            "properties": {
+              "gate":             { "type": "string",
+                                    "description": "Gate number/name (e.g. `Gate 3 (≥3 RR output sections)`)." },
+              "location":         { "type": "string",
+                                    "description": "Section + line/quote in the hypothesis." },
+              "required_to_pass": { "type": "string" }
+            }
+          }
+        },
+        "content_failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["claim_quoted", "why_unsupported", "concrete_evidence_needed"],
+            "properties": {
+              "claim_quoted":            { "type": "string" },
+              "why_unsupported":         { "type": "string" },
+              "concrete_evidence_needed":{ "type": "string" }
+            }
+          }
+        },
+        "required_corrections": {
+          "type": "array",
+          "items":  { "type": "string" },
+          "description": "Consolidated numbered list the next round's `Addressed rebuttal points` will cite by number."
+        },
+        "strong_parts": { "type": "array", "items": { "type": "string" },
+                          "description": "Optional; reduces churn in the next round." }
+      }
+    }
+  ]
+}
+```
 
 ## Mechanical gates (fail fast; write rebuttal on any hit)
 

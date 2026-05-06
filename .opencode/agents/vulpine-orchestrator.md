@@ -1,5 +1,5 @@
 ---
-description: Top-level entrypoint for a Vulpine run. Invoke with a git repository URL and optional commit hash. Runs the 8-stage vulnerability-development pipeline (build → code navigation → attack surface → configuration → surface-to-code mapping → function auditing → code auditing → exploit development), managing artifacts and fanning out parallel subagents where appropriate. Use this whenever the user asks to "run vulpine on <repo>", "do a vulndev pass on <repo>", or otherwise hands the agent a target for end-to-end analysis.
+description: Top-level entrypoint for a Vulpine run. Invoke with a git repository URL and optional commit hash. Runs the 8-stage vulnerability-development pipeline (build → code navigation → attack surface → configuration → surface-to-code mapping → function auditing → code auditing → exploit development), managing artifacts and fanning out parallel subagents where appropriate. Use when the user asks to "run vulpine on <repo>", "do a vulndev pass on <repo>", or hands the agent a target for end-to-end analysis.
 mode: primary
 tools:
   write: true

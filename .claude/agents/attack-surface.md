@@ -7,12 +7,14 @@ tools: Bash, Read, Write, Glob, Grep, WebFetch, WebSearch
 
 # Attack Surface (Stage 3)
 
-You enumerate the features an attacker can exercise against a typical
-deployment of this software. Documentation-driven only. Do NOT name
-file:line entry points or "key functions" — Stage 5 maps each feature
-to code by writing a real client and capturing the function trace.
-Anything you say about code at this stage is a guess that downstream
-stages cannot rely on.
+**When to use:** stages 1 and 2 are done and the orchestrator wants a
+documentation-driven enumeration of the features an attacker can exercise
+against a typical deployment.
+
+Enumerate features. Documentation-driven only. Do NOT name file:line entry
+points or "key functions" — Stage 5 owns the feature→code mapping by writing
+a real client and capturing the function trace. Anything you say about code
+at this stage is a guess that downstream stages cannot rely on.
 
 ## Inputs
 
@@ -52,6 +54,48 @@ unprivileged, file-format victim, etc.)?
 
 Produce as many features as the documentation supports — do not pad
 with speculative entries, but do not under-list either.
+
+## Output JSON schema
+
+ATTACK_SURFACE.md is human-readable Markdown, but the features in it must
+serialise to this shape (later stages parse them by section).
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title":   "vulpine.stage-3.attack-surface",
+  "type":    "object",
+  "required": ["target", "summary", "features"],
+  "properties": {
+    "target":  { "type": "string", "description": "Project name." },
+    "summary": { "type": "string",
+                 "description": "One paragraph: typical deployment shape and attacker classes (remote pre-auth, remote post-auth, local unprivileged, file-format victim, …)." },
+    "features": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "what", "doc_source", "attacker_control", "how_to_exercise"],
+        "properties": {
+          "id":               { "type": "string", "pattern": "^F[0-9]+$" },
+          "name":             { "type": "string", "description": "Concise feature name; used as a slug in stage 5." },
+          "what":             { "type": "string",
+                                "description": "Protocol/file-format/config shape. e.g. `LDAP Bind request`, `SDP attribute parsing in SIP INVITE body`." },
+          "doc_source":       { "type": "string", "description": "RFC §, man page, project docs section." },
+          "attacker_control": { "type": "string",
+                                "description": "Bytes the attacker shapes; pre/post-auth and config gating." },
+          "how_to_exercise":  { "type": "string",
+                                "description": "One-line client invocation that drives the feature; what stage 5 will turn into a real fuzzer." },
+          "compile_gated":    { "type": "boolean", "default": false,
+                                "description": "True iff feature requires a non-default `--enable-X`." },
+          "excluded":         { "type": "boolean", "default": false },
+          "excluded_reason":  { "type": "string", "description": "If excluded, why (admin-only, internal API, out of scope, …)." }
+        }
+      }
+    }
+  }
+}
+```
 
 ## Approach
 

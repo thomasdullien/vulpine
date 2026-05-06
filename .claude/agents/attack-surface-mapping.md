@@ -7,6 +7,11 @@ tools: Agent, Bash, Read, Write, Edit, Glob, Grep
 
 # Attack Surface → Code Mapping (Stage 5)
 
+**When to use:** stages 1-4 are done and the orchestrator wants each feature
+in `ATTACK_SURFACE.md` mapped to the set of functions the daemon actually
+exercises while a deterministic fuzzer drives that feature. After mapping,
+fan out one `function-auditor` subagent per feature.
+
 ## Environment smoke-test (run FIRST)
 
 Stages 6 and 7 cannot do their job if this stage skips gcov or
@@ -57,6 +62,57 @@ $VULPINE_RUN/features/
 ├── F2-<slug>/
 │   └── …
 └── SUMMARY.md                  # one row per feature with function-count + notes
+```
+
+## Output JSON schema
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title":   "vulpine.stage-5.feature-map",
+  "type":    "object",
+  "description": "Per-feature directory $VULPINE_RUN/features/<Fi>-<slug>/.",
+  "required": ["fuzz.sh", "seeds/", "coverage.json", "baseline.coverage.json",
+               "trace.ftrc", "trace.txt", "functions.txt", "sanity.json"],
+  "properties": {
+    "fuzz.sh": { "type": "string",
+                 "description": "Deterministic harness; preferred shapes (no fallback unless higher tier impossible): real-daemon → CLI → library-host." },
+    "seeds/":  { "type": "string", "description": "1-20 corpus inputs covering the feature." },
+    "coverage.json":          { "type": "string", "description": "gcov coverage from the feature run." },
+    "baseline.coverage.json": { "type": "string", "description": "gcov coverage from a null invocation (empty / first-byte-rejected)." },
+    "trace.ftrc":             { "type": "string", "description": "cppfunctrace binary trace." },
+    "trace.perfetto-trace":   { "type": "string",
+                                "description": "Perfetto-form trace via ftrc2perfetto. Required iff target ships a daemon (run-traced-*.sh exists, excluding harness-*.sh)." },
+    "trace.txt":              { "type": "string",
+                                "description": "ENTER/EXIT events; one per line: `ts thread depth ENTER|EXIT symbol`." },
+    "functions.txt":          { "type": "string",
+                                "description": "Sorted list of feature-unique symbols (≤ ~500 entries)." },
+    "fuzz.sh.ext-<sym>.patch":{ "type": "string",
+                                "description": "Iff the auditor extended fuzz.sh to promote a Tier-B symbol; one patch per promotion." },
+    "coverage.ext-<sym>.json":{ "type": "string",
+                                "description": "Coverage from a Tier-B promotion run; reach_evidence target." },
+    "sanity.json": {
+      "type": "object",
+      "required": ["coverage_delta", "baseline_size", "feature_size", "top_n_justifications"],
+      "properties": {
+        "coverage_delta":       { "type": "integer", "minimum": 5,
+                                  "description": "|hit_by(Fi)| − |hit_by(baseline)|; ≥ max(5, 1% of feature_size)." },
+        "baseline_size":        { "type": "integer", "minimum": 0 },
+        "feature_size":         { "type": "integer", "minimum": 0 },
+        "top_n_justifications": { "type": "array", "minItems": 10, "maxItems": 10,
+                                  "items": { "type": "object",
+                                             "required": ["symbol", "reason"],
+                                             "properties": {
+                                               "symbol": { "type": "string" },
+                                               "reason": { "type": "string", "description": "One sentence anchoring the symbol to the feature's What/How-to-exercise." }
+                                             } } },
+        "skipped":              { "type": "boolean", "default": false,
+                                  "description": "True iff this feature failed sanity checks; do NOT dispatch function-auditor." },
+        "skipped_reason":       { "type": "string" }
+      }
+    }
+  }
+}
 ```
 
 ## Approach

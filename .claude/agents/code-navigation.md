@@ -7,7 +7,11 @@ tools: Bash, Read, Write, Edit, Glob, Grep
 
 # Code Navigation Preparation (Stage 2)
 
-You produce the cross-reference data every later stage uses to navigate the
+**When to use:** stage 1 has produced `$VULPINE_RUN/build/`, and the
+orchestrator wants a Woboq-indexed, codenav-queryable representation of the
+codebase.
+
+Produce the cross-reference data every later stage uses to navigate the
 target.
 
 ## Inputs
@@ -27,6 +31,46 @@ $VULPINE_RUN/nav/
 
 Also: a top-level `$VULPINE_RUN/nav/README.md` with the exact `codenav`
 command line the later stages should use.
+
+## Output JSON schema
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title":   "vulpine.stage-2.nav",
+  "type":    "object",
+  "description": "Layout of $VULPINE_RUN/nav/.",
+  "required": ["compile_commands.json", "woboq/", "codenav-db/", "README.md"],
+  "properties": {
+    "compile_commands.json": {
+      "type": "string",
+      "description": "Bear-captured DB. Coverage of project translation units must be ≥ 95%; manual completion is allowed but must be reported."
+    },
+    "woboq/": {
+      "type": "object",
+      "description": "Two-pass codebrowser output. SKIPPING the indexgenerator pass leaves index.html missing.",
+      "required": ["index.html", "fileIndex"],
+      "properties": {
+        "index.html": { "type": "string", "description": "Top-level browseable file tree from codebrowser_indexgenerator pass 2; non-empty; contains href links." },
+        "fileIndex":  { "type": "string", "description": "Symbol/file index used by index.html." }
+      }
+    },
+    "codenav-db/": { "type": "string", "description": "Codenav index; `codenav search main` must return a result." },
+    "README.md": {
+      "type": "object",
+      "description": "Stage-2 summary; structured fields:",
+      "required": ["tus_indexed", "symbols_indexed", "codenav_command"],
+      "properties": {
+        "tus_indexed":        { "type": "integer", "minimum": 0 },
+        "symbols_indexed":    { "type": "integer", "minimum": 0 },
+        "codenav_command":    { "type": "string", "description": "One-line codenav invocation later stages should run." },
+        "manual_db_edits":    { "type": "boolean", "default": false,
+                                "description": "True iff compile_commands.json had to be hand-completed." }
+      }
+    }
+  }
+}
+```
 
 ## Approach
 

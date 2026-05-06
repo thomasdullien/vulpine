@@ -18,7 +18,7 @@ models (open and closed) on the same vulndev workflow.
 | 3 | `attack-surface`             | `ATTACK_SURFACE.md` — enumerated reachable features. |
 | 4 | `configuration`              | `configure-target.sh` — turns the container into a realistic deployment. |
 | 5 | `attack-surface-mapping`     | `features/<feature>/` — minimal deterministic fuzzer + gcov coverage → function set. Fans out to N copies of agent 6. |
-| 6 | `function-auditor`           | `audit-log.db` — intent vs. implementation summary for every touched function, plus a ranked list of misbehaving ones. |
+| 6 | `function-auditor` (dispatcher) → `single-function-auditor` (worker, one per symbol on a clean context) | `audit-log.db` — intent vs. implementation summary for every Tier-A function, plus a ranked list of misbehaving ones. Each worker also writes a line-by-line Markdown reasoning trace under `features/<F>/audits/*.trace.md` so the per-symbol audit reasoning can be inspected and diffed across models. |
 | 7 | `code-auditor` (+ `crash-analyzer` / `crash-analyzer-checker`) | `issues/<id>/` — report, minimal trigger, GDB verification script. For critical memory-corruption findings, drives a ≤4-round analyzer/checker loop producing an `evidence/` chain with real rr output; unresolved after 4 rounds → CONTESTED (severity capped at `high`). |
 | 8 | `exploit-developer`          | `exploit/` — chained-bug exploit attempts + `EXPLOIT_LEARNINGS.md`. |
 

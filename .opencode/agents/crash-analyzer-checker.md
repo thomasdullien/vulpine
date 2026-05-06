@@ -1,5 +1,5 @@
 ---
-description: Stage 7 helper. Validates a root-cause-hypothesis-NNN.md produced by the crash-analyzer. Runs mechanical format gates first (≥3 RR sections, ≥5 distinct 0x addresses, no hedging language, per-step Code + RR + actual-output), then content gates (allocation site plausible, every modification backed by rr output, source↔assembly match at crash). Accepts, or writes root-cause-hypothesis-NNN-rebuttal.md with specific deficiencies and required corrections.
+description: Stage 7 helper. Validates a root-cause-hypothesis-NNN.md produced by the crash-analyzer. Runs mechanical format gates first (≥3 RR sections, ≥5 distinct 0x addresses, no hedging language, per-step Code + RR + actual-output), then content gates (allocation site plausible, every modification backed by rr output, source↔assembly match at crash). Accepts, or writes root-cause-hypothesis-NNN-rebuttal.md with specific deficiencies and required corrections. Invoke on "check hypothesis NNN for issue X".
 mode: subagent
 tools:
   write: true

@@ -7,9 +7,12 @@ tools: Bash, Read, Write, Edit, Glob, Grep
 
 # Configuration (Stage 4)
 
-Stage 1 built the target; you turn it into a realistically-configured
-deployment so later stages exercise real code paths rather than default
-no-op configs.
+**When to use:** stage 1 has built the target and the orchestrator wants
+the container provisioned to look like a realistic enterprise deployment so
+later stages exercise real code paths rather than default no-op configs.
+
+The user may supply `$VULPINE_RUN/CONFIGURATION.md` with overrides; if
+present, it wins ties against anything you infer from the docs.
 
 ## Inputs
 
@@ -55,6 +58,44 @@ Contract for the script:
   'root' password 'root', database seeded with 3 rows"). Also prints the
   absolute path to `daemon-asan.log` (`--asan`) or
   `daemon-traced.perfetto-trace` (`--traced`).
+
+## Output JSON schema
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title":   "vulpine.stage-4.configure-target",
+  "type":    "object",
+  "required": ["script", "modes", "stdout_summary"],
+  "properties": {
+    "script": { "type": "string", "const": "configure-target.sh",
+                "description": "Bash, executable, idempotent." },
+    "modes": {
+      "type": "object",
+      "required": ["default", "asan", "traced"],
+      "description": "Mutually-exclusive run modes. All three configure the target identically — only the binary path and instrumentation differ.",
+      "properties": {
+        "default": { "type": "string",
+                     "description": "No flag — starts build-plain/ binaries." },
+        "asan":    { "type": "string",
+                     "description": "--asan — starts run-asan-*.sh wrappers; tees stderr to $VULPINE_RUN/daemon-asan.log; cleans the log at start." },
+        "traced":  { "type": "string",
+                     "description": "--traced — starts run-traced-*.sh wrappers; on shutdown converts .ftrc → daemon-traced.perfetto-trace and leaves daemon-traced.ftrc + daemon-traced.perfetto-trace at $VULPINE_RUN/." }
+      }
+    },
+    "pid_file":      { "type": "string", "default": "/run/target.pid",
+                       "description": "Daemon PID (or wrapper PID under --asan/--traced)." },
+    "ports":         { "type": "array", "items": { "type": "string" },
+                       "description": "Listening sockets (e.g. `tcp/8443`)." },
+    "credentials":   { "type": "array", "items": { "type": "string" },
+                       "description": "Generated dummy creds (user/pass; cert paths)." },
+    "stdout_summary":{ "type": "string",
+                       "description": "One-line; ports/files/users/state. Includes absolute path to daemon-asan.log under --asan and daemon-traced.perfetto-trace under --traced." },
+    "library_host":  { "type": "string",
+                       "description": "Iff target is a library: path to the minimal host program emitted alongside the script." }
+  }
+}
+```
 
 ## Approach
 

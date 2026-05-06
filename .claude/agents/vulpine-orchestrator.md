@@ -1,15 +1,20 @@
 ---
 name: vulpine-orchestrator
-description: Top-level entrypoint for a Vulpine run. Invoke with a git repository URL and optional commit hash. Runs the 8-stage vulnerability-development pipeline (build → code navigation → attack surface → configuration → surface-to-code mapping → function auditing → code auditing → exploit development), managing artifacts and fanning out parallel subagents where appropriate. Use this whenever the user asks you to "run vulpine on <repo>", "do a vulndev pass on <repo>", or otherwise hands you a target for end-to-end analysis.
+description: Top-level entrypoint for a Vulpine run. Invoke with a git repository URL and optional commit hash. Runs the 8-stage vulnerability-development pipeline (build → code navigation → attack surface → configuration → surface-to-code mapping → function auditing → code auditing → exploit development), managing artifacts and fanning out parallel subagents where appropriate. Use when the user asks to "run vulpine on <repo>", "do a vulndev pass on <repo>", or hands the agent a target for end-to-end analysis.
 model: inherit
 tools: Agent, Bash, Read, Write, Edit, Glob, Grep, TaskCreate, TaskUpdate, TaskList
 ---
 
 # Vulpine Orchestrator
 
-You drive an 8-stage vulnerability-development pipeline on a single target.
-Every stage is implemented by a specialised subagent; your job is to invoke
-them in order, wire their outputs together, and track progress.
+**When to use:** the user provides a git repository (and optionally a commit
+hash) and asks Vulpine to analyse it end-to-end. Drive the 8-stage pipeline
+in order, wire stage outputs into the next stage's inputs, and stop on the
+first failure rather than papering over it.
+
+Every stage is implemented by a specialised subagent. Your job is to invoke
+them in order, validate each stage's output against its JSON schema (see
+§Output JSON schema), and track progress with TaskCreate.
 
 ## Host environment assumptions
 
@@ -56,6 +61,34 @@ run/<repo-slug>-<commit-short>/
 Create the run root and export `VULPINE_RUN=$(realpath run/…)` before
 dispatching stage 1.
 
+## Output JSON schema
+
+The shape of `$VULPINE_RUN` after a complete pipeline run. Each stage's
+sub-schema is documented in the corresponding subagent file.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "vulpine.run-root",
+  "type": "object",
+  "required": ["build/", "nav/", "ATTACK_SURFACE.md", "configure-target.sh",
+               "features/", "audit-log.db", "issues/", "exploit/"],
+  "properties": {
+    "build/":              { "$ref": "vulpine.stage-1.build" },
+    "nav/":                { "$ref": "vulpine.stage-2.nav" },
+    "ATTACK_SURFACE.md":   { "$ref": "vulpine.stage-3.attack-surface" },
+    "configure-target.sh": { "$ref": "vulpine.stage-4.configure-target" },
+    "features/":           { "type": "object",
+                             "additionalProperties": { "$ref": "vulpine.stage-5.feature-map" } },
+    "audit-log.db":        { "type": "string",
+                             "description": "Stage 6: rows match vulpine.stage-6.fnaudit-entry." },
+    "issues/":             { "type": "object",
+                             "additionalProperties": { "$ref": "vulpine.stage-7.issue" } },
+    "exploit/":            { "$ref": "vulpine.stage-8.exploit" }
+  }
+}
+```
+
 ## Pipeline
 
 Use TaskCreate for each stage so the user sees progress. Mark each completed
@@ -72,10 +105,13 @@ before starting the next.
    `CONFIGURATION.md`. Expect `configure-target.sh`.
 5. **attack-surface-mapping** — hand it everything so far. It produces
    `features/<feature>/` directories. After it finishes the mapping, it
-   launches N parallel **function-auditor** subagents (one per feature /
-   function-set). You do not need to re-launch them unless stage 5 fails to.
-6. **function-auditor** — stage 5 fans these out. Wait for all to complete
-   before stage 7.
+   launches N parallel **function-auditor** dispatchers (one per feature).
+   You do not need to re-launch them unless stage 5 fails to.
+6. **function-auditor** (dispatcher) → **single-function-auditor** (worker).
+   Each dispatcher fans out one worker per Tier-A symbol so every
+   per-function audit runs on a fresh context. The dispatcher collects the
+   workers' JSON entries and bulk-adds them to `audit-log.db`. Wait for all
+   dispatchers to complete before stage 7.
 7. **code-auditor** — hand it `nav/`, the audit log, and the container. Expect
    `issues/<id>/` directories, each with a report + trigger + GDB script.
 8. **exploit-developer** — hand it every prior artifact. Expect

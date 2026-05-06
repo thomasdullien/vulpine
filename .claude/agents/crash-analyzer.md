@@ -7,10 +7,12 @@ tools: Bash, Read, Write, Edit, Glob, Grep
 
 # Crash Analyzer (Stage 7 helper)
 
-You produce a forensic, fully-empirical evidence chain for a single critical
-memory-corruption finding. Your output feeds the `crash-analyzer-checker`,
-which will reject anything unsupported by concrete rr output. Iterate (up to
-4 rounds) until the checker accepts.
+**When to use:** the code-auditor invokes you for a CRITICAL memory-corruption
+issue (UAF, double-free, OOB write, heap/stack overflow, type confusion,
+use-of-uninit). Produce a forensic, fully-empirical evidence chain for that
+single finding. Your output feeds the `crash-analyzer-checker`, which will
+reject anything unsupported by concrete rr output. Iterate (up to 4 rounds)
+until the checker accepts.
 
 ## Inputs
 
@@ -34,6 +36,65 @@ $issue_dir/evidence/
 ```
 
 Write your hypothesis as `root-cause-hypothesis-<zero-padded-round>.md`.
+
+## Output JSON schema
+
+The hypothesis is Markdown, but its structure must satisfy the mechanical
+contract below. The checker greps these properties out and rejects on
+violation.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title":   "vulpine.stage-7-helper.hypothesis",
+  "type":    "object",
+  "description": "Mechanical contract for evidence/root-cause-hypothesis-<NNN>.md.",
+  "required": ["round", "header", "sections", "rr_sections_count",
+               "distinct_addresses", "no_hedging"],
+  "properties": {
+    "round":  { "type": "integer", "minimum": 1, "maximum": 4 },
+    "header": { "type": "string",
+                "pattern": "^# Root-cause hypothesis — issue .+, round [0-9]+$" },
+    "sections": {
+      "type": "array",
+      "description": "All required H2 titles must be present.",
+      "allOf": [
+        { "contains": { "const": "## Summary" } },
+        { "contains": { "const": "## Environment" } },
+        { "contains": { "const": "## Pointer lifecycle" } },
+        { "contains": { "const": "## Source ↔ assembly correspondence at crash site" } },
+        { "contains": { "const": "## Violated invariant" } },
+        { "contains": { "const": "## Addresses observed (index)" } }
+      ]
+    },
+    "rr_sections_count": {
+      "type": "integer", "minimum": 3,
+      "description": "Numbered subsections under Pointer lifecycle. Each has Code (file:line) + RR commands (fenced) + Actual output (fenced)."
+    },
+    "distinct_addresses": {
+      "type": "integer", "minimum": 5,
+      "description": "Distinct 0x[0-9a-fA-F]{4,16} addresses; placeholders (0xDEADBEEF, 0xCAFEBABE, all-zero) excluded."
+    },
+    "no_hedging": {
+      "type": "boolean", "const": true,
+      "description": "Zero whole-word case-insensitive matches for: likely, probably, should, expected, seems, maybe, perhaps, appears, might, possibly, i think, i believe — except inside `> ` block-quotes."
+    },
+    "addressed_rebuttal_points": {
+      "type": "array",
+      "description": "Required iff round ≥ 2; one entry per rebuttal point quoting the rebuttal verbatim plus the section/change that addresses it.",
+      "items": {
+        "type": "object",
+        "required": ["quote", "addressed_in_section", "change_made"],
+        "properties": {
+          "quote":               { "type": "string" },
+          "addressed_in_section":{ "type": "string" },
+          "change_made":         { "type": "string" }
+        }
+      }
+    }
+  }
+}
+```
 
 ## Hard evidence requirements
 

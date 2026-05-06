@@ -7,6 +7,10 @@ tools: Agent, Bash, Read, Write, Edit, Glob, Grep
 
 # Code Auditor (Stage 7)
 
+**When to use:** stages 1-6 are done and the orchestrator wants real
+security findings — bugs, not maybes — each backed by a minimal trigger,
+ASan log produced by `capture-asan.sh`, and a verifying GDB script.
+
 ## HARD GATE — read first
 
 After writing each issue, run `$VULPINE_ROOT/tools/validate-issue.sh
@@ -152,6 +156,81 @@ OOB reads or benign UB — note it and consider capping severity.
 
 ## Fix sketch
 One paragraph — enough that a maintainer could write the patch.
+```
+
+## Output JSON schema
+
+Per-issue directory under `$VULPINE_RUN/issues/<NNN>-<slug>/`. The
+report.md headings serialise to the `metadata` object below; the
+validator (`validate-issue.sh`) parses it.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title":   "vulpine.stage-7.issue",
+  "type":    "object",
+  "required": ["report.md", "trigger.bin", "trigger.sh", "verify.gdb",
+               "asan.log", "asan-run.manifest", "plain-rerun.log",
+               "coverage-delta.txt", "verify.rr", "metadata"],
+  "properties": {
+    "report.md":          { "type": "string", "description": "Schema in §Output contract; includes Verification Status." },
+    "trigger.bin":        { "type": "string", "description": "Minimal input." },
+    "trigger.sh":         { "type": "string", "description": "Exact command that reproduces." },
+    "verify.gdb":         { "type": "string", "description": "GDB script asserting the bad state is reached." },
+    "asan.log":           { "type": "string", "description": "Produced by capture-asan.sh — never hand-written." },
+    "asan-run.manifest":  { "type": "string", "description": "sha256 + PID + timing recorded by capture-asan.sh." },
+    "plain-rerun.log":    { "type": "string", "description": "trigger.sh run against the non-sanitized build." },
+    "coverage-delta.txt": { "type": "string", "description": "gcov diff; vulnerable line MUST appear." },
+    "verify.rr":          { "type": "string", "description": "rr replay script (mandatory for memory-corruption)." },
+    "taint-chain.md":     { "type": "string", "description": "Required iff metadata.evidence_layer == 'application'." },
+    "evidence/": {
+      "type": "object",
+      "description": "MANDATORY for CRITICAL memory-corruption only.",
+      "properties": {
+        "root-cause-hypothesis-NNN.md":          { "type": "string" },
+        "root-cause-hypothesis-NNN-rebuttal.md": { "type": "string" },
+        "root-cause-hypothesis-NNN-verdict.md":  { "type": "string" }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Structured fields mirrored from report.md headings; this is what validate-issue.sh keys on.",
+      "required": ["title", "severity", "feature", "primitive",
+                   "verification_status", "evidence_layer"],
+      "properties": {
+        "title":                { "type": "string" },
+        "severity":             { "enum": ["critical", "high", "medium", "low"] },
+        "feature":              { "type": "string", "pattern": "^F[0-9]+-",
+                                  "description": "Slug from ATTACK_SURFACE.md." },
+        "functions_involved":   { "type": "array",
+                                  "items": { "type": "object",
+                                             "required": ["symbol", "file", "line", "role"],
+                                             "properties": {
+                                               "symbol": { "type": "string" },
+                                               "file":   { "type": "string" },
+                                               "line":   { "type": "integer", "minimum": 1 },
+                                               "role":   { "type": "string" } } } },
+        "primitive":            { "enum": ["oob-read", "oob-write", "uaf", "double-free",
+                                            "int-overflow-to-alloc", "logic-bypass", "info-leak",
+                                            "type-confusion", "race", "toctou", "shell-escape",
+                                            "memory-disclosure", "other"] },
+        "verification_status":  { "enum": ["CONFIRMED", "CONTESTED", "UNCONFIRMED", "THEORETICAL"] },
+        "evidence_layer":       { "enum": ["application", "library"] },
+        "taint_classification": { "enum": ["attacker-controlled", "constant", "sentinel",
+                                            "clamped", "harness-forged"],
+                                  "description": "Required when evidence_layer == 'application'. Anything other than `attacker-controlled` forces verification_status = THEORETICAL." }
+      }
+    }
+  },
+  "allOf": [
+    { "if":   { "properties": { "metadata": { "properties": { "verification_status": { "const": "CONTESTED" } } } } },
+      "then": { "properties": { "metadata": { "properties": { "severity": { "enum": ["high", "medium", "low"] } } } } } },
+    { "if":   { "properties": { "metadata": { "properties": { "verification_status": { "const": "UNCONFIRMED" } } } } },
+      "then": { "properties": { "metadata": { "properties": { "severity": { "enum": ["medium", "low"] } } } } } },
+    { "if":   { "properties": { "metadata": { "properties": { "verification_status": { "const": "THEORETICAL" } } } } },
+      "then": { "properties": { "metadata": { "properties": { "severity": { "const": "low" } } } } } }
+  ]
+}
 ```
 
 ## Approach
