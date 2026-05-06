@@ -7,57 +7,41 @@ tools: Bash, Read, Write, Edit, Glob, Grep
 
 # Configuration (Stage 4)
 
-**When to use:** stage 1 has built the target and the orchestrator wants
-the container provisioned to look like a realistic enterprise deployment so
-later stages exercise real code paths rather than default no-op configs.
-
-The user may supply `$VULPINE_RUN/CONFIGURATION.md` with overrides; if
-present, it wins ties against anything you infer from the docs.
+**When to use:** stage 1 has built the target; provision the container to
+look like a realistic enterprise deployment so later stages exercise real
+code paths, not no-op defaults.
 
 ## Inputs
 
 - `VULPINE_RUN` — run directory.
-- Optional `$VULPINE_RUN/CONFIGURATION.md` — user overrides for specific
-  knobs (bind addresses, feature flags, credentials to use). If present, it
-  wins ties against anything you infer from the docs.
+- Optional `$VULPINE_RUN/CONFIGURATION.md` — user overrides; if present, it
+  wins ties against anything inferred from the docs.
 
 ## Output contract
 
-A single bash script: `$VULPINE_RUN/configure-target.sh`.
+Emit `$VULPINE_RUN/configure-target.sh` — bash, executable, idempotent.
 
-Contract for the script:
+Three mutually-exclusive modes, all configuring the target identically
+(same config files, ports, users); only the binary path and
+instrumentation differ:
 
-- Three mutually-exclusive modes:
-  - default (no flag) — starts the `build-plain/` binaries.
-  - `--asan` — starts the stage-1 `run-asan-<daemon>.sh` wrappers;
-    stderr tees to `$VULPINE_RUN/daemon-asan.log` so stage 7 can grep
-    for crash banners.
-  - `--traced` — starts the stage-1 `run-traced-<daemon>.sh` wrappers
-    (cppfunctrace-instrumented). On shutdown, SIGTERMs the daemon so
-    the trace buffer flushes, then converts the emitted `.ftrc` files
-    to `.perfetto-trace` via `ftrc2perfetto` and leaves them at
-    `$VULPINE_RUN/daemon-traced.ftrc` + `daemon-traced.perfetto-trace`
-    for stage 5 to consume.
-  All three modes must otherwise configure the target identically
-  (same config files, same ports, same users) — only the binary path
-  and instrumentation differ.
-- Exits 0 if configuration succeeds.
-- Is idempotent: running it twice leaves the container in the same state.
-  If a previous invocation left a daemon running, stop it before
-  starting the new one. Clean up `daemon-asan.log` at the start of each
-  `--asan` run so stage 7 sees only this run's output.
-- Does not download anything at run time (network may be off for analysis).
-  Any required assets must live under `$VULPINE_RUN/build/` and be referenced
-  from there.
-- Starts the target in the background if the target is a daemon, and writes
-  its PID to `/run/target.pid` inside the container. Under `--asan` /
-  `--traced` the PID written is the wrapper's PID (same process tree),
-  so killing it kills the underlying binary too.
-- Writes a one-line summary of what it configured to stdout (e.g. "listening
-  on tcp/8443 with self-signed cert at /etc/target/cert.pem, admin user
-  'root' password 'root', database seeded with 3 rows"). Also prints the
-  absolute path to `daemon-asan.log` (`--asan`) or
-  `daemon-traced.perfetto-trace` (`--traced`).
+| flag        | runs                            | side effects |
+|-------------|---------------------------------|--------------|
+| (default)   | `build-plain/` binaries         | none |
+| `--asan`    | stage-1 `run-asan-*.sh` wrappers | tees stderr to `$VULPINE_RUN/daemon-asan.log`; cleans the log at start |
+| `--traced`  | stage-1 `run-traced-*.sh` wrappers | on shutdown SIGTERMs the daemon (flushes the trace), runs `ftrc2perfetto`, leaves `$VULPINE_RUN/daemon-traced.{ftrc,perfetto-trace}` |
+
+Other contract requirements:
+
+- Exits 0 on success; idempotent (running twice = same state, including
+  stopping any prior daemon).
+- No network at runtime — any required assets must live under
+  `$VULPINE_RUN/build/`.
+- For daemon targets, runs the daemon in the background and writes PID
+  to `/run/target.pid` (under `--asan`/`--traced` this is the wrapper PID;
+  killing it kills the binary).
+- Prints a one-line stdout summary: ports, files, users, seeded state,
+  plus the absolute path of the relevant log/trace.
 
 ## Output JSON schema
 
@@ -68,68 +52,53 @@ Contract for the script:
   "type":    "object",
   "required": ["script", "modes", "stdout_summary"],
   "properties": {
-    "script": { "type": "string", "const": "configure-target.sh",
-                "description": "Bash, executable, idempotent." },
+    "script":        { "const": "configure-target.sh" },
     "modes": {
       "type": "object",
       "required": ["default", "asan", "traced"],
-      "description": "Mutually-exclusive run modes. All three configure the target identically — only the binary path and instrumentation differ.",
       "properties": {
-        "default": { "type": "string",
-                     "description": "No flag — starts build-plain/ binaries." },
-        "asan":    { "type": "string",
-                     "description": "--asan — starts run-asan-*.sh wrappers; tees stderr to $VULPINE_RUN/daemon-asan.log; cleans the log at start." },
-        "traced":  { "type": "string",
-                     "description": "--traced — starts run-traced-*.sh wrappers; on shutdown converts .ftrc → daemon-traced.perfetto-trace and leaves daemon-traced.ftrc + daemon-traced.perfetto-trace at $VULPINE_RUN/." }
+        "default": { "type": "string" },
+        "asan":    { "type": "string" },
+        "traced":  { "type": "string" }
       }
     },
-    "pid_file":      { "type": "string", "default": "/run/target.pid",
-                       "description": "Daemon PID (or wrapper PID under --asan/--traced)." },
-    "ports":         { "type": "array", "items": { "type": "string" },
-                       "description": "Listening sockets (e.g. `tcp/8443`)." },
-    "credentials":   { "type": "array", "items": { "type": "string" },
-                       "description": "Generated dummy creds (user/pass; cert paths)." },
-    "stdout_summary":{ "type": "string",
-                       "description": "One-line; ports/files/users/state. Includes absolute path to daemon-asan.log under --asan and daemon-traced.perfetto-trace under --traced." },
+    "pid_file":      { "type": "string", "default": "/run/target.pid" },
+    "ports":         { "type": "array", "items": { "type": "string" } },
+    "credentials":   { "type": "array", "items": { "type": "string" } },
+    "stdout_summary":{ "type": "string" },
     "library_host":  { "type": "string",
-                       "description": "Iff target is a library: path to the minimal host program emitted alongside the script." }
+                       "description": "Iff target is a library: minimal host program path." }
   }
 }
 ```
 
 ## Approach
 
-1. Read the project's deployment docs and default config files (usually
-   `conf/`, `etc/`, `examples/`). If there is a "production" or "sample"
-   config, use it as the baseline rather than starting from scratch.
-2. Use `codenav` to locate every config-file parser entry point and confirm
-   the options you set actually reach live code paths. A flag that the code
-   doesn't read is dead weight.
-3. Generate only the minimum secrets needed (self-signed certs, dummy keys,
-   admin user) — keep them inside the container.
-4. Pay attention to features that only activate under specific config (e.g.
-   "rate limiter is off by default" → turn it on if `ATTACK_SURFACE.md`
-   covers it).
-5. If the target is a library, the "configuration" is a minimal host program
-   that links the library and exposes its API over stdin / a TCP socket.
-   Emit that host program alongside the script.
-
-## Skills
-
-- `codenav` — for verifying config keys actually reach parser code.
+1. Read the project's deployment docs and sample configs (`conf/`, `etc/`,
+   `examples/`). Use any "production" or "sample" config as the baseline.
+2. `codenav` each config key you set to confirm it reaches live parser
+   code — keys the code doesn't read are dead weight.
+3. Generate only the minimum secrets (self-signed certs, dummy admin
+   user); keep them inside the container.
+4. Turn ON features that `ATTACK_SURFACE.md` covers but ship off by
+   default (e.g. rate limiter, TLS).
+5. Library target → emit a minimal host program that links the library
+   and exposes its API over stdin or a TCP socket.
 
 ## Footguns
 
-- Do not write the config file to the repo. Write it into the container's
-  real config path. The script can either `cat <<EOF` it or copy from a
-  template under `$VULPINE_RUN/configure-assets/`.
-- Avoid "secure defaults" if the goal is to exercise features. For stage 3
-  features like "TLS handshake", turn TLS on.
-- Avoid hard-coding absolute paths that only exist on the host. The script
-  runs inside the container.
+- Write configs into the container's real config path, not into the repo
+  (use `cat <<EOF` or templates under `$VULPINE_RUN/configure-assets/`).
+- Don't pick "secure defaults" that disable the very features you're
+  trying to exercise.
+- Don't hard-code host-only absolute paths — the script runs inside the
+  container.
+
+## Skills
+
+- `codenav` — verify config keys reach parser code.
 
 ## Return value
 
-- The exact ports / sockets / files the attacker will interact with.
-- Anything you could not configure (e.g. needs third-party service); stage 5
-  needs to know so it can stub those.
+- Exact ports / sockets / files the attacker will interact with.
+- Anything you could not configure (stage 5 needs to know to stub).

@@ -7,58 +7,51 @@ tools: Bash, Read, Write, Glob, Grep, WebFetch, WebSearch
 
 # Attack Surface (Stage 3)
 
-**When to use:** stages 1 and 2 are done and the orchestrator wants a
-documentation-driven enumeration of the features an attacker can exercise
+**When to use:** stages 1 and 2 are done; the orchestrator wants a
+documentation-driven enumeration of the features an attacker can drive
 against a typical deployment.
 
-Enumerate features. Documentation-driven only. Do NOT name file:line entry
-points or "key functions" — Stage 5 owns the feature→code mapping by writing
-a real client and capturing the function trace. Anything you say about code
-at this stage is a guess that downstream stages cannot rely on.
+Documentation is the only source. Do NOT name file:line entry points or
+"key functions" — Stage 5 owns the feature→code mapping via real client
+traces, and any code anchor you produce here is a guess that downstream
+stages cannot rely on.
 
 ## Inputs
 
-- `VULPINE_RUN` — run directory; stages 1 and 2 have populated
-  `build/` and `nav/`. You may use `nav/` to confirm a feature is
-  actually compiled in (e.g. checking that an `--enable-X` was on),
-  but you do NOT use it to anchor features to code.
+- `VULPINE_RUN` — `build/` and `nav/` are populated. You may use `nav/`
+  *only* to confirm compile-time gating (e.g. that `--enable-X` was on).
 
 ## Output contract
 
 `$VULPINE_RUN/ATTACK_SURFACE.md`:
 
 ```markdown
-# Attack Surface: <target name>
+# Attack Surface: <target>
 
 ## Summary
-One paragraph: how is this software typically deployed? What kinds
-of attackers does it face (remote pre-auth, remote post-auth, local
-unprivileged, file-format victim, etc.)?
+One paragraph: typical deployment shape; attacker classes (remote
+pre-auth, remote post-auth, local unprivileged, file-format victim, …).
 
 ## Features
 
-### F1. <concise feature name>
-- **What:** the feature's protocol / file-format / configuration
-  shape (e.g. "LDAP Bind request", "SDP attribute parsing in SIP
-  INVITE body", "`-listen` config option's per-host ACL parsing").
-- **Documentation source:** RFC §, man page, project docs section.
-- **Attacker control:** what bytes of the input are attacker-shaped,
-  and any pre-auth / post-auth / config gating that matters.
-- **How to exercise:** one-line client invocation that drives the
-  feature (`ldapsearch -x -b … -s base`, `curl -X POST --data-binary
-  @body.bin`, `nc localhost 389 < bytes.bin`, …). This is what
-  Stage 5 will turn into a real fuzzer.
+### F1. <concise name>
+- **What:** protocol/file-format/config shape (e.g. "LDAP Bind request",
+  "SDP attribute parsing in SIP INVITE body").
+- **Documentation source:** RFC §, man page, docs section.
+- **Attacker control:** bytes the attacker shapes; pre/post-auth and
+  config gating.
+- **How to exercise:** one-line client invocation that drives the feature
+  (`ldapsearch -x -b … -s base`, `curl -X POST --data-binary @body.bin`,
+  …). Stage 5 will turn this into a real fuzzer.
 
 ### F2. …
 ```
 
-Produce as many features as the documentation supports — do not pad
-with speculative entries, but do not under-list either.
+Cover what the docs support — don't pad, don't under-list.
 
 ## Output JSON schema
 
-ATTACK_SURFACE.md is human-readable Markdown, but the features in it must
-serialise to this shape (later stages parse them by section).
+The Markdown must serialise to this shape (stage 5 parses it by section):
 
 ```json
 {
@@ -67,29 +60,25 @@ serialise to this shape (later stages parse them by section).
   "type":    "object",
   "required": ["target", "summary", "features"],
   "properties": {
-    "target":  { "type": "string", "description": "Project name." },
-    "summary": { "type": "string",
-                 "description": "One paragraph: typical deployment shape and attacker classes (remote pre-auth, remote post-auth, local unprivileged, file-format victim, …)." },
+    "target":  { "type": "string" },
+    "summary": { "type": "string" },
     "features": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "name", "what", "doc_source", "attacker_control", "how_to_exercise"],
+        "required": ["id", "name", "what", "doc_source",
+                     "attacker_control", "how_to_exercise"],
         "properties": {
           "id":               { "type": "string", "pattern": "^F[0-9]+$" },
-          "name":             { "type": "string", "description": "Concise feature name; used as a slug in stage 5." },
-          "what":             { "type": "string",
-                                "description": "Protocol/file-format/config shape. e.g. `LDAP Bind request`, `SDP attribute parsing in SIP INVITE body`." },
-          "doc_source":       { "type": "string", "description": "RFC §, man page, project docs section." },
-          "attacker_control": { "type": "string",
-                                "description": "Bytes the attacker shapes; pre/post-auth and config gating." },
-          "how_to_exercise":  { "type": "string",
-                                "description": "One-line client invocation that drives the feature; what stage 5 will turn into a real fuzzer." },
-          "compile_gated":    { "type": "boolean", "default": false,
-                                "description": "True iff feature requires a non-default `--enable-X`." },
+          "name":             { "type": "string" },
+          "what":             { "type": "string" },
+          "doc_source":       { "type": "string" },
+          "attacker_control": { "type": "string" },
+          "how_to_exercise":  { "type": "string" },
+          "compile_gated":    { "type": "boolean", "default": false },
           "excluded":         { "type": "boolean", "default": false },
-          "excluded_reason":  { "type": "string", "description": "If excluded, why (admin-only, internal API, out of scope, …)." }
+          "excluded_reason":  { "type": "string" }
         }
       }
     }
@@ -99,39 +88,31 @@ serialise to this shape (later stages parse them by section).
 
 ## Approach
 
-1. Read the project's `README`, docs, `man/`, `SECURITY.md` if any.
-   The project's own deployment docs are the primary source.
-2. Skim the wire / file-format specs the project implements. RFC
-   sections and IANA registries enumerate request types, header
-   fields, content types — each is a candidate feature. Mention each
-   one even if you suspect it is well-tested; Stage 5 will re-rank
-   by what actually fires.
-3. Use `nav/` only to confirm compile-time gating (e.g. "feature X
-   is conditional on `--enable-foo` and the build has it on"). Do
-   NOT walk callgraphs or claim entry-point symbols here.
+1. Read the project's `README`, docs, `man/`, `SECURITY.md`. Project
+   deployment docs are the primary source.
+2. Skim the wire/file-format specs the project implements. RFC sections
+   and IANA registries enumerate request types, header fields, content
+   types — each is a candidate feature. List well-tested ones too;
+   stage 5 re-ranks by what actually fires.
+3. Use `nav/` only for compile-time-gating confirmation. Do NOT walk
+   callgraphs or claim entry-point symbols.
 
-Do NOT search for historical CVEs. Past CVEs anchor attention to
-bugs that have already been found and fixed; we want fresh feature
-enumeration. Stage 6 / 7 will look for new defects.
-
-## Skills
-
-- `codenav` — only for compile-time-gating confirmation, not for
-  feature→code mapping.
+Do NOT search for historical CVEs — they anchor attention to bugs
+already fixed; stage 7 hunts new defects.
 
 ## Footguns
 
-- Do not pad. A feature gated by a compile-time flag the default
-  build does not enable, list it but de-prioritise.
-- Do not list internal API surface. A function only ever called by
-  the project's own test harness is not an attacker-reachable
-  feature.
-- Do not claim file:line locations. Stage 5 owns the feature→code
-  mapping via traces; your guesses here will mislead.
+- A compile-flag-gated feature the default build doesn't enable: list
+  it but de-prioritise.
+- Internal API surface (functions only called by the project's own
+  tests) is not attacker-reachable; skip.
+- file:line guesses mislead stage 5/7. Don't make them.
+
+## Skills
+
+- `codenav` — compile-time-gating confirmation only.
 
 ## Return value
 
-- Number of features identified.
-- One-line headline of each.
-- Features deliberately excluded (compile-flag gated, admin-only,
-  out of scope) and why.
+- Number of features identified; one-line headline of each.
+- Features deliberately excluded and why.

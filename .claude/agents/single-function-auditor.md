@@ -7,111 +7,81 @@ tools: Bash, Read, Write, Edit, Glob, Grep
 
 # Single-Function Auditor (Stage 6 worker)
 
-**When to use:** the stage-6 dispatcher (`function-auditor`) spawns you with a
-single symbol on a fresh context. Audit only that symbol; do NOT walk to its
-callers/callees and audit them too — they have their own workers.
-
-A clean context is the point of this split: previous functions' bodies must
-not bias the analysis of yours.
+**When to use:** the stage-6 dispatcher (`function-auditor`) spawns you
+with a single symbol on a fresh context. Audit only that symbol — do NOT
+walk to callers/callees; they have their own workers. The clean context
+is the point of the split.
 
 ## Refusal contract (run FIRST)
 
-You must be invoked with `KEY=VALUE` preamble lines, at minimum:
+Required `KEY=VALUE` preamble lines:
 
-- `VULPINE_RUN=<absolute-path>`
-- `feature=<slug>` (a directory under `$VULPINE_RUN/features/`)
-- `symbol_qualified=<fully-qualified C/C++ symbol>`
-- `reach_evidence=<path>` — `features/<F>/coverage.json` for Tier A,
-  `features/<F>/coverage.ext-<sym>.json` for Tier-B promoted.
-- `out_path=<abs path>` — where to write the resulting JSON entry.
-- `trace_path=<abs path>` — where to write the line-by-line reasoning
-  trace (a Markdown artifact; see §Reasoning trace artifact).
-- `example_trace_path=<abs path>` — the canonical audit-reasoning example
-  (`tools/example-traces/strarray2str.trace.md`), passed explicitly so the
-  worker doesn't have to guess `$VULPINE_ROOT`.
-- `audit_summary_path=<abs path>` — feature briefing, typically
-  `$VULPINE_RUN/features/$feature/audit-summary.md`.
+| Key | Description |
+|-----|-------------|
+| `VULPINE_RUN`        | absolute path |
+| `feature`            | slug under `$VULPINE_RUN/features/` |
+| `symbol_qualified`   | fully-qualified C/C++ symbol |
+| `reach_evidence`     | `coverage.json` (Tier A) or `coverage.ext-<sym>.json` (Tier-B promoted) |
+| `out_path`           | absolute path for the JSON entry |
+| `trace_path`         | absolute path for the Markdown reasoning trace |
+| `example_trace_path` | path to `tools/example-traces/strarray2str.trace.md` |
+| `audit_summary_path` | feature briefing, usually `features/$feature/audit-summary.md` |
 
-If any are missing, write
+Any missing → write
 `$VULPINE_RUN/MISUSE-$(date +%s)-single-function-auditor.md` naming the
-missing field, exit non-zero. Do NOT freelance.
+field, exit non-zero. Do not freelance.
 
-## Environment smoke-test
+## Smoke-test
 
 ```bash
 export FNAUDIT_DB="$VULPINE_RUN/audit-log.db"
 export CODENAV_DATA="$VULPINE_RUN/nav/codenav-db"
 export CODENAV_SRC="$VULPINE_RUN/build/src"
-codenav search main 2>/dev/null | head -1 \
-    || { echo "codenav unusable"; exit 1; }
-fnaudit info >/dev/null \
-    || { echo "fnaudit CLI unusable"; exit 1; }
-test -s "$reach_evidence" \
-    || { echo "reach_evidence missing/empty: $reach_evidence"; exit 1; }
+codenav search main 2>/dev/null | head -1 || { echo "codenav unusable"; exit 1; }
+fnaudit info >/dev/null || { echo "fnaudit unusable"; exit 1; }
+test -s "$reach_evidence" || { echo "reach_evidence empty: $reach_evidence"; exit 1; }
 ```
 
-## Tool discipline (read FIRST)
+## Tool discipline
 
-**Use `codenav` for code lookups. Do NOT use `Read` or `Grep` to fetch a
-function body, count its callers, or walk its callees.** Those substitutes
-are imprecise (extra surrounding lines) and lose the `body_sha` /
-`callers_count` anchors stage 7 threads.
+Use `codenav` for code lookups — never `Read`/`Grep` for function
+bodies, callers, or callees (loses the `body_sha`/`callers_count` anchors
+stage 7 threads).
 
-Canonical lookups:
+| Need | Use |
+|------|-----|
+| function body | `codenav body <sym>` |
+| callers       | `codenav callers <sym>` |
+| callees       | `codenav callees <sym>` |
+| body_sha      | `codenav body <sym> \| sha256sum` |
 
-| Need                | Use this                                       |
-|---------------------|------------------------------------------------|
-| function body       | `codenav body <sym>`                           |
-| callers             | `codenav callers <sym>`                        |
-| callees             | `codenav callees <sym>`                        |
-| body_sha for audit  | `codenav body <sym> \| sha256sum`              |
-
-If `codenav body` returns nothing, the symbol is virtual / templated /
-ambiguous / unindexed. Write the skip JSON below and exit cleanly:
+If `codenav body` returns empty, the symbol is virtual / templated /
+unindexed. Write the skip JSON below to `$out_path` and exit cleanly:
 
 ```json
 { "skipped": true, "symbol_qualified": "<sym>", "reason": "symbol unresolved" }
 ```
 
-`Read`, `Grep`, `Glob` remain fine for non-code data: project docs, config
-files, the per-feature briefing.
-
-## Inputs
-
-All inputs arrive via the KEY=VALUE preamble (see §Refusal contract).
-Read each referenced file exactly once before starting the audit:
-
-- `audit_summary_path` — feature briefing; tells you what attacker control
-  surface this feature owns. Read first.
-- `example_trace_path` — canonical audit-reasoning example; tells you the
-  shape of reasoning to produce. Read second.
-
-Do NOT read other feature briefings or other example traces — they would
-pollute the clean context this worker exists for.
+`Read`/`Grep`/`Glob` are fine for non-code data (docs, configs, the
+feature briefing).
 
 ## Approach
 
-1. **Read the feature briefing.** `Read $audit_summary_path` — one call; it
-   names the attacker control surface, the protocol, and the trace shape
-   for this feature.
-2. **Read the canonical reasoning example.** `Read $example_trace_path` —
-   one call; that is the shape of reasoning you must produce: walk the
-   body line-by-line, annotate running state with `//!`, note types
-   explicitly (`size_t buflen - 5` underflows when `buflen < 5`), end with
-   the question that ties the finding to stage 7 ("can an attacker drive
-   this parameter?").
-3. **Pull the body.** `codenav body $symbol_qualified > /tmp/body.c`.
-   Empty → emit the skip JSON to `$out_path`, done.
-4. **Compute anchors:**
+1. **Read the feature briefing** at `$audit_summary_path` — what
+   attacker control surface this feature owns.
+2. **Read the canonical reasoning example** at `$example_trace_path` —
+   the shape of reasoning to produce.
+3. **Pull the body**: `codenav body $symbol_qualified > /tmp/body.c`.
+   Empty → emit skip JSON, done.
+4. **Compute anchors**:
    ```bash
    body_sha=$(codenav body "$symbol_qualified" | sha256sum | cut -d' ' -f1)
    callers_count=$(codenav callers "$symbol_qualified" | wc -l)
    ```
-5. **Audit by writing the reasoning trace** to `$trace_path`. This file IS
-   the audit — see §Reasoning trace artifact for the required structure.
-   Walk the body line-by-line, annotate running state with `//!`, note
-   types explicitly, and end with the reachability question. While walking,
-   look for:
+5. **Write the reasoning trace** to `$trace_path` (this IS the audit;
+   structure under §Reasoning trace artifact). Walk the body
+   line-by-line, annotate state with `//!`, note types explicitly, and
+   close with the reachability question. Hunt for:
    - integer overflow / sign mismatch / promotion flip
    - arithmetic before allocation producing surprising sizes
    - variable-length reads/writes where byte count ≠ arg (N=0 edge)
@@ -121,24 +91,18 @@ pollute the clean context this worker exists for.
    - allocations / deallocations visible after return
    - callers that don't check error returns
 
-   All issues you record are THEORETICAL (`verification_status:
-   "theoretical"`) — stage 7 confirms.
-6. **Distil the trace into the JSON entry** at `$out_path`. Single JSON
-   object conforming to §Output JSON schema. Each `issues[].site` cites a
-   specific line range from the trace; the JSON's `intent` summarises the
-   trace's "Intent" section. The dispatcher will `fnaudit bulk-add` the
-   JSON; do NOT write to the DB yourself. Set the JSON's `trace_path`
-   field to the path you wrote in step 5 so stage 7 can pull the
-   line-by-line reasoning when investigating a finding.
+   All issues are `verification_status: "theoretical"` — stage 7 confirms.
+6. **Distil into the JSON entry** at `$out_path`. Each `issues[].site`
+   cites trace lines; `intent` summarises the trace's Intent section.
+   Set `trace_path` to the path you wrote in step 5. The dispatcher
+   will `fnaudit bulk-add`; do NOT write to the DB yourself.
 
 ## Reasoning trace artifact
 
-`$trace_path` is the per-symbol Markdown reasoning record. It exists so
-that across runs and across models you can `grep`/diff how the auditor
-reasoned through each function — the structured JSON is for stage 7 and
-fnaudit, the trace is for human review and model evaluation.
-
-Required structure:
+`$trace_path` is the per-symbol Markdown reasoning record — durable
+across runs and models, independent of any harness transcript log. The
+JSON serves stage 7 + fnaudit; the trace serves human review and model
+evaluation.
 
 ```markdown
 # <symbol_qualified> — line-by-line audit
@@ -148,71 +112,61 @@ Required structure:
 - file: <file_path>:<line_start>-<line_end>
 - body_sha: <full sha256>
 - callers_count: <n>
-- reach_evidence: <path the dispatcher passed in>
+- reach_evidence: <path>
 - reviewer: vulpine/single-function-auditor/<model-id>
 - source_commit: <hash>
 
 ## Intent
-One paragraph in your own words: what does the programmer want this
-function to do? Derive from name, comments, and (if cheap) call sites.
+One paragraph: what does the programmer want this function to do?
+Derive from name, comments, and (cheaply available) call sites.
 
 ## Walk-through
-The function body, copied verbatim from `codenav body`, annotated with
-`//!` lines that track running state, types, and constraints. Match the
-shape of `tools/example-traces/strarray2str.trace.md` — that example is
-the standard.
+The function body verbatim from `codenav body`, annotated with `//!`
+lines tracking state, types, and constraints. Match the shape of
+`tools/example-traces/strarray2str.trace.md`.
 
 ```c
 int strarray2str(char **a, char *buf, size_t buflen, int include_quotes)
 {
     //! buflen: size_t (unsigned). buf: caller-owned, length = buflen.
-    int rc = 0;                      //! rc: 0 means success
+    int rc = 0;                      //! 0 means success
     char *p = buf;                   //! p in [buf, buf+buflen)
     size_t totlen = 0;
     if (include_quotes) {
-        if (buflen < 3) return -1;   //! guards next two writes (quote + ' ')
+        if (buflen < 3) return -1;   //! guards next two writes
         *p++ = '"';                  //! totlen=1, p=buf+1
-        ++totlen;
+        ...
     }
-    ...
 }
 ```
 
 ## Findings
-For each issue you'll record in the JSON, name it here in one or two
-lines and point at the trace lines that motivate it. Severity, category,
-and the testability note belong in the JSON; this section is the
-reasoning that produced them.
+For each JSON-recorded issue, name it here and point at the motivating
+trace lines. Severity/category/testability go in the JSON.
 
-- **<short title>** (severity: high) — see walk-through line N. The
-  expression `totlen + len > buflen - 5` underflows when `buflen < 5`
-  because `buflen` is `size_t`; the compare then evaluates against
-  `(size_t)-1..(size_t)-5`, defeating the truncation guard.
+- **<title>** (severity: high) — see line N. `totlen + len > buflen - 5`
+  underflows for `buflen < 5` (`size_t` is unsigned), bypassing the
+  truncation guard.
 
-## Reachability question (closing)
-Can an attacker drive the parameter(s) involved? Reference the feature
-briefing (`audit_summary_path`) — name the wire bytes / config knob /
-file-format field. If the answer is "no, this is constant/sentinel/
-clamped upstream", say so; that becomes `verification_blocked_by` in
-the JSON issue.
+## Reachability question
+Can an attacker drive the parameters? Cite the feature briefing — name
+the wire bytes / config knob / file-format field. If the answer is
+"no, constant/sentinel/clamped upstream", say so; it becomes
+`verification_blocked_by` in the JSON.
 ```
 
-Keep the trace focused on *this* function. Do NOT trace callers/callees —
-they have their own workers.
+Keep it focused on *this* function. No callers/callees.
 
 ## Output JSON schema
 
-The output file at `$out_path` is exactly one of:
+`$out_path` is exactly one of:
 
+**Skipped:**
 ```json
-{
-  "skipped": true,
-  "symbol_qualified": "<sym>",
-  "reason": "symbol unresolved"
-}
+{ "skipped": true, "symbol_qualified": "<sym>", "reason": "symbol unresolved" }
 ```
 
-…or a full entry conforming to `vulpine.stage-6.fnaudit-entry`:
+**Full entry** (`vulpine.stage-6.fnaudit-entry`):
 
 ```json
 {
@@ -229,8 +183,7 @@ The output file at `$out_path` is exactly one of:
     "file_path":        { "type": "string" },
     "line_start":       { "type": "integer", "minimum": 1 },
     "line_end":         { "type": "integer", "minimum": 1 },
-    "intent":           { "type": "string",
-                          "description": "What the programmer wants — derived from name, comments, callsites." },
+    "intent":           { "type": "string" },
     "issues": {
       "type": "array",
       "items": {
@@ -238,15 +191,15 @@ The output file at `$out_path` is exactly one of:
         "required": ["severity", "category", "description", "site",
                      "verification_status", "testability_notes"],
         "properties": {
-          "severity":               { "enum": ["critical", "high", "medium", "low", "info"] },
-          "category":               { "type": "string" },
-          "description":            { "type": "string", "description": "1-3 sentences." },
-          "site":                   { "type": "string",
-                                      "description": "Cite specific lines from `codenav body`, e.g. `lines 47-52 of body_sha=abc...`." },
-          "verification_status":    { "const": "theoretical" },
-          "testability_notes":      { "type": "string",
-                                      "description": "How stage 7 would craft a trigger; name the seed if symbol is Tier-A observed." },
-          "verification_blocked_by":{ "type": "string" }
+          "severity":             { "enum": ["critical", "high", "medium", "low", "info"] },
+          "category":             { "type": "string" },
+          "description":          { "type": "string", "description": "1-3 sentences." },
+          "site":                 { "type": "string",
+              "description": "Cite trace lines, e.g. `lines 47-52 of body_sha=abc...`." },
+          "verification_status":  { "const": "theoretical" },
+          "testability_notes":    { "type": "string",
+              "description": "How stage 7 would craft a trigger; name the seed if Tier-A." },
+          "verification_blocked_by": { "type": "string" }
         }
       }
     },
@@ -264,38 +217,32 @@ The output file at `$out_path` is exactly one of:
     "source_commit":  { "type": "string" },
     "body_sha":       { "type": "string" },
     "callers_count":  { "type": "integer", "minimum": 0 },
-    "reach_evidence": { "type": "string",
-                        "description": "Echo back the input reach_evidence path." },
-    "trace_path":     { "type": "string",
-                        "description": "Echo back the input trace_path. Stage 7 reads the trace when investigating findings; the cross-run reasoning corpus is built by collecting these files." }
+    "reach_evidence": { "type": "string" },
+    "trace_path":     { "type": "string" }
   }
 }
 ```
 
-## Skills
-
-- `fnaudit` — schema reference. Do NOT call `fnaudit add` / `bulk-add`
-  yourself; the dispatcher owns DB writes.
-- `codenav` — `body`, `callers`, `callees`. Authoritative.
-
 ## Footguns
 
-- Do not author an entry from the function name alone. Read the body.
-- Do not audit third-party vendored code the project doesn't own — emit
-  the skip JSON with reason `vendored`.
-- Do not overstate severity. An integer overflow that needs exactly
-  `SIZE_MAX` bytes is `low` if upstream validation blocks it.
-- Do not write to the audit DB. Write JSON to `$out_path`. Period.
-- Do not walk to callers/callees and audit them. Other workers handle them.
-- Do not skip the trace artifact. The JSON is the structured summary; the
-  trace at `$trace_path` is the human-readable reasoning corpus and is
-  required even when there are no findings. A worker that returns a JSON
-  entry but no trace is a contract violation.
+- Do not author from the function name alone. Read the body.
+- Vendored third-party code → emit skip JSON with reason `vendored`.
+- Don't overstate severity. Integer overflow needing exactly `SIZE_MAX`
+  bytes is `low` if upstream validation blocks it.
+- Do not write to the DB. JSON to `$out_path`. Period.
+- Do not walk to callers/callees.
+- The trace at `$trace_path` is required even when there are no
+  findings. JSON without trace is a contract violation.
+
+## Skills
+
+- `fnaudit` — schema reference only. The dispatcher owns DB writes.
+- `codenav` — `body`, `callers`, `callees`.
 
 ## Return value
 
-A one-paragraph stdout summary so the dispatcher's log is readable:
+One paragraph stdout:
 
-- Symbol audited, max issue severity, count of issues, body_sha (first 12).
-- Path to the reasoning trace at `$trace_path`.
-- Or, if skipped: the reason (no trace expected for skipped symbols).
+- Symbol, max issue severity, issue count, body_sha (first 12).
+- Trace path.
+- Or skip reason (no trace expected).

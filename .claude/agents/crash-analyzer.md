@@ -7,130 +7,47 @@ tools: Bash, Read, Write, Edit, Glob, Grep
 
 # Crash Analyzer (Stage 7 helper)
 
-**When to use:** the code-auditor invokes you for a CRITICAL memory-corruption
-issue (UAF, double-free, OOB write, heap/stack overflow, type confusion,
-use-of-uninit). Produce a forensic, fully-empirical evidence chain for that
-single finding. Your output feeds the `crash-analyzer-checker`, which will
-reject anything unsupported by concrete rr output. Iterate (up to 4 rounds)
-until the checker accepts.
+**When to use:** the code-auditor invokes you for a CRITICAL
+memory-corruption finding (UAF, double-free, OOB write, heap/stack
+overflow, type confusion, use-of-uninit). Produce a forensic,
+fully-empirical evidence chain. The `crash-analyzer-checker` reviews
+your output and rejects anything not backed by concrete rr output;
+iterate up to 4 rounds.
 
 ## Inputs
 
-- `VULPINE_RUN` — run directory.
-- `issue_dir` — path to `$VULPINE_RUN/issues/<id>/`. Must already contain
-  `trigger.bin`, `trigger.sh`, `asan.log`, and ideally a raw rr recording
-  under `rr-trace/` (if not, you record one first).
-- `round` — integer 1..4.
-- `rebuttal_path` — for round ≥ 2, path to the previous round's
-  `root-cause-hypothesis-(round-1)-rebuttal.md`. You MUST read it and
-  address every point it raises.
+- `VULPINE_RUN`, `issue_dir` (`$VULPINE_RUN/issues/<id>/`).
+  Pre-existing: `trigger.bin`, `trigger.sh`, `asan.log`, ideally
+  `rr-trace/` (record one if absent).
+- `round` — 1..4.
+- `rebuttal_path` — round ≥ 2: previous round's rebuttal. You MUST read
+  it and address every point.
 
 ## Output
 
+Write `evidence/root-cause-hypothesis-<zero-padded-round>.md`.
+
 ```
 $issue_dir/evidence/
-├── root-cause-hypothesis-001.md   # round 1
-├── root-cause-hypothesis-001-rebuttal.md   # (written by checker)
-├── root-cause-hypothesis-002.md   # round 2 — addresses the rebuttal
+├── root-cause-hypothesis-001.md
+├── root-cause-hypothesis-001-rebuttal.md   # checker writes
+├── root-cause-hypothesis-002.md            # round 2 — addresses rebuttal
 └── …
 ```
 
-Write your hypothesis as `root-cause-hypothesis-<zero-padded-round>.md`.
-
-## Output JSON schema
-
-The hypothesis is Markdown, but its structure must satisfy the mechanical
-contract below. The checker greps these properties out and rejects on
-violation.
-
-```json
-{
-  "$schema": "https://json-schema.org/draft-07/schema#",
-  "title":   "vulpine.stage-7-helper.hypothesis",
-  "type":    "object",
-  "description": "Mechanical contract for evidence/root-cause-hypothesis-<NNN>.md.",
-  "required": ["round", "header", "sections", "rr_sections_count",
-               "distinct_addresses", "no_hedging"],
-  "properties": {
-    "round":  { "type": "integer", "minimum": 1, "maximum": 4 },
-    "header": { "type": "string",
-                "pattern": "^# Root-cause hypothesis — issue .+, round [0-9]+$" },
-    "sections": {
-      "type": "array",
-      "description": "All required H2 titles must be present.",
-      "allOf": [
-        { "contains": { "const": "## Summary" } },
-        { "contains": { "const": "## Environment" } },
-        { "contains": { "const": "## Pointer lifecycle" } },
-        { "contains": { "const": "## Source ↔ assembly correspondence at crash site" } },
-        { "contains": { "const": "## Violated invariant" } },
-        { "contains": { "const": "## Addresses observed (index)" } }
-      ]
-    },
-    "rr_sections_count": {
-      "type": "integer", "minimum": 3,
-      "description": "Numbered subsections under Pointer lifecycle. Each has Code (file:line) + RR commands (fenced) + Actual output (fenced)."
-    },
-    "distinct_addresses": {
-      "type": "integer", "minimum": 5,
-      "description": "Distinct 0x[0-9a-fA-F]{4,16} addresses; placeholders (0xDEADBEEF, 0xCAFEBABE, all-zero) excluded."
-    },
-    "no_hedging": {
-      "type": "boolean", "const": true,
-      "description": "Zero whole-word case-insensitive matches for: likely, probably, should, expected, seems, maybe, perhaps, appears, might, possibly, i think, i believe — except inside `> ` block-quotes."
-    },
-    "addressed_rebuttal_points": {
-      "type": "array",
-      "description": "Required iff round ≥ 2; one entry per rebuttal point quoting the rebuttal verbatim plus the section/change that addresses it.",
-      "items": {
-        "type": "object",
-        "required": ["quote", "addressed_in_section", "change_made"],
-        "properties": {
-          "quote":               { "type": "string" },
-          "addressed_in_section":{ "type": "string" },
-          "change_made":         { "type": "string" }
-        }
-      }
-    }
-  }
-}
-```
-
-## Hard evidence requirements
-
-The checker rejects mechanically on any violation:
-
-1. **≥ 3 RR output sections**, labeled:
-   - Allocation (malloc/new/mmap/stack site for the abused object).
-   - Modification(s) — ≥1 intermediate event (write, free, realloc,
-     type pun) establishing the bad state.
-   - Crash — faulting instruction with register values.
-2. **≥ 5 distinct `0x…` addresses** observed live in rr (not
-   placeholders; not `&buf` — use `0x7ffff6a12340`).
-3. **Zero hedging language.** Checker rejects on any word from:
-   `likely | probably | should | expected | seems | maybe | perhaps |
-   appears | might | possibly | I think | I believe`.
-4. **Each pointer-chain step has Code + RR commands + Actual output**
-   (source line w/ file:line; the exact rr commands you ran; the
-   literal text rr printed — no paraphrasing).
-5. **Source ↔ assembly match at the crash site.** Include `disas /s`
-   showing the faulting instruction alongside its source line; if the
-   compiler inlined/reordered, state it and show evidence.
-
-## Required structure of the hypothesis document
+## Required document structure
 
 ```markdown
 # Root-cause hypothesis — issue <id>, round <n>
 
 ## Summary
-One paragraph, no hedging. What the bug is, the primitive, and why the
-crash occurs.
+One paragraph, no hedging. The bug, the primitive, why it crashes.
 
 ## Environment
 - Commit: <hash>
 - Binary build: asan / plain / coverage
-- rr recording: path to `rr-trace/` + `rr replay` invocation
-- glibc/allocator version, if relevant
+- rr recording: path + replay invocation
+- glibc/allocator version (if relevant)
 
 ## Pointer lifecycle
 
@@ -139,7 +56,6 @@ crash occurs.
 ```c
 p = malloc(n);
 ```
-
 **RR commands:**
 ```
 (rr) break foo.cc:123
@@ -148,24 +64,18 @@ p = malloc(n);
 (rr) print p
 (rr) print n
 ```
-
 **Actual output:**
 ```
 Breakpoint 1 at foo.cc:123
-…
 $1 = (void *) 0x7ffff6a12340
 $2 = 0x20
 ```
 
-### 2. Modification — <what happens here>
-**Code** (…):  
-**RR commands:** …  
-**Actual output:** …
-
-(repeat per step)
+### 2. Modification — <what happens>
+**Code:** … **RR commands:** … **Actual output:** …
 
 ### N. Crash / faulty dereference
-**Code** (…):  
+**Code:** …
 **RR commands:**
 ```
 (rr) continue
@@ -173,69 +83,123 @@ Program received signal SIGSEGV …
 (rr) info registers
 (rr) disas /s $pc-16,$pc+16
 ```
-**Actual output:** <full text including register dump and disassembly>
+**Actual output:** <register dump + disassembly>
 
 ## Source ↔ assembly correspondence at crash site
-Show the relevant source line and the exact instruction the CPU executed
-when it faulted. Explain any compiler transformation (inlining, scheduling)
-using actual rr / gdb output.
+The source line and the exact instruction that faulted. Explain any
+inlining/scheduling with actual rr/gdb output.
 
 ## Violated invariant
-One or two sentences naming the programmer's intended invariant
-(e.g. "`p->refcnt > 0 implies *p is readable`") and the exact point at
-which it becomes false.
+1-2 sentences naming the intended invariant (e.g. `p->refcnt > 0
+implies *p is readable`) and the step at which it becomes false.
 
 ## Addresses observed (index)
-A bulleted list of every `0x…` address that appears in this document with
-a one-line label ("allocation of `buf` in foo.cc:123",
-"RIP at crash", "`*rdi` at crash", …). The checker uses this to count
-distinct addresses — make it explicit.
+Bulleted list of every `0x…` in this document with a one-line label
+(`allocation of buf in foo.cc:123`, `RIP at crash`, `*rdi at crash`).
+The checker counts distinct addresses here.
 
 ## Addressed rebuttal points (round ≥ 2 only)
-Numbered list: each point raised in the previous round's rebuttal, quoted
-verbatim, followed by where in the current hypothesis it is addressed
-(section + concrete change made).
+For each point in the prior rebuttal: verbatim quote → which section
+addresses it → concrete change made.
 ```
+
+## Output JSON schema
+
+The checker greps these properties from the Markdown and rejects on
+violation.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title":   "vulpine.stage-7-helper.hypothesis",
+  "type":    "object",
+  "required": ["round", "header", "sections", "rr_sections_count",
+               "distinct_addresses", "no_hedging"],
+  "properties": {
+    "round":  { "type": "integer", "minimum": 1, "maximum": 4 },
+    "header": { "type": "string",
+                "pattern": "^# Root-cause hypothesis — issue .+, round [0-9]+$" },
+    "sections": { "type": "array",
+      "allOf": [
+        { "contains": { "const": "## Summary" } },
+        { "contains": { "const": "## Environment" } },
+        { "contains": { "const": "## Pointer lifecycle" } },
+        { "contains": { "const": "## Source ↔ assembly correspondence at crash site" } },
+        { "contains": { "const": "## Violated invariant" } },
+        { "contains": { "const": "## Addresses observed (index)" } }
+      ] },
+    "rr_sections_count": {
+      "type": "integer", "minimum": 3,
+      "description": "Numbered subsections under Pointer lifecycle, each with Code + RR commands + Actual output." },
+    "distinct_addresses": {
+      "type": "integer", "minimum": 5,
+      "description": "Real `0x[0-9a-fA-F]{4,16}` addresses (placeholders excluded)." },
+    "no_hedging": {
+      "type": "boolean", "const": true,
+      "description": "Whole-word case-insensitive: no likely/probably/should/expected/seems/maybe/perhaps/appears/might/possibly/i think/i believe outside `> ` block-quotes." },
+    "addressed_rebuttal_points": {
+      "type": "array",
+      "description": "Required iff round ≥ 2.",
+      "items": { "type": "object",
+                 "required": ["quote", "addressed_in_section", "change_made"],
+                 "properties": {
+                   "quote":               { "type": "string" },
+                   "addressed_in_section":{ "type": "string" },
+                   "change_made":         { "type": "string" } } }
+    }
+  }
+}
+```
+
+## Hard evidence requirements
+
+The checker rejects on any of these:
+
+1. **≥ 3 RR output sections**: allocation, ≥1 modification (write/free/
+   realloc/type-pun establishing the bad state), and crash (faulting
+   instruction with registers).
+2. **≥ 5 distinct real `0x…` addresses** observed live in rr (no
+   `&buf`, no `0xDEADBEEF`).
+3. **Zero hedging language** (see schema).
+4. **Each pointer-chain step has Code + RR commands + Actual output** —
+   verbatim rr text, not paraphrased.
+5. **Source ↔ assembly match at crash** — `disas /s` block; call out any
+   inlining/reordering with evidence.
 
 ## Approach
 
-1. Read `issue_dir/report.md`, `asan.log`, `trigger.sh`.
-2. Obtain an rr recording (use existing `rr-trace/` if present,
-   otherwise record per `rr-debugger` skill — plain build preferred
-   over ASan to avoid red-zone offset distortion).
-3. Identify the fault: `rr replay` → `continue` → crash; grab `$pc`,
-   `info registers`, `disas /s`. That's the bottom of the chain.
-4. Walk backwards via `reverse-cont`, `reverse-stepi`, watchpoints
-   (`watch -l *(void **)0x…`) to the last legitimate modification of
-   the corrupted object. Record every stop, address, register value.
-5. Bottom out at the allocation (malloc / construction).
-6. `disas /s` at the crash site; compare to source; call out inlining
-   or reordering if present.
-7. Write the hypothesis per the structure above. Every claim needs
-   rr output backing it.
-8. Round ≥ 2: read `rebuttal_path` first. The `Addressed rebuttal
-   points` section is mandatory — the checker verifies each.
-
-## Skills
-
-- `rr-debugger` — authoritative. Read its SKILL.md before starting.
-- `codenav` — resolving source ↔ symbol ↔ line, walking callers.
-- `gcov-coverage` — rarely useful here; the rr recording is more precise.
-- `cppfunctrace` — for the ordered call graph between allocation and
-  crash, if you need orientation before diving in with rr.
+1. Read `report.md`, `asan.log`, `trigger.sh`.
+2. Obtain an rr recording (existing `rr-trace/`, otherwise record via
+   `rr-debugger`; plain build preferred — ASan distorts addresses).
+3. Find the fault: `rr replay` → `continue` → crash; grab `$pc`,
+   `info registers`, `disas /s`. Bottom of the chain.
+4. Walk back via `reverse-cont`, `reverse-stepi`, watchpoints
+   (`watch -l *(void **)0x…`) to the last legitimate modification.
+   Record every stop with address and register state.
+5. Bottom out at the allocation.
+6. `disas /s` at the crash; compare to source; call out inlining/
+   reordering.
+7. Write the hypothesis. Every claim is backed by rr output.
+8. Round ≥ 2: read `rebuttal_path` first; `Addressed rebuttal points`
+   is mandatory.
 
 ## Footguns
 
-- No hedging language. Ever.
-- No symbolic placeholders (`0xDEADBEEF`, `0x<ADDR>`). Real addresses only.
-- Copy rr output verbatim — do not paraphrase.
-- ASan red-zone offsets distort addresses; if recording under ASan,
+- No hedging. No symbolic placeholders. Real addresses only.
+- Copy rr output verbatim.
+- ASan red-zone offsets distort addresses — if recording under ASan,
   note it and show the shadow-map offset.
-- Document every modification step; do not skip to keep the doc short.
+- Don't skip modification steps to keep the doc short.
 - Round ≥ 2: address content criticisms, not just mechanical points.
+
+## Skills
+
+- `rr-debugger` — authoritative. Read its SKILL.md first.
+- `codenav` — resolving source ↔ symbol ↔ line, walking callers.
+- `cppfunctrace` — orientation between allocation and crash, if needed.
 
 ## Return value
 
-- Path to `root-cause-hypothesis-NNN.md` you wrote.
+- Path to the hypothesis file you wrote.
 - Round number.
-- Summary of how this round differs from the previous (round ≥ 2 only).
+- Round ≥ 2: how this round differs from the previous.
