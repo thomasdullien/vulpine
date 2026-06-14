@@ -4,7 +4,7 @@
 # OpenCode has no native "skills" concept; Vulpine's agent prompts reference
 # skill content via absolute paths under $HOME/.vulpine/skills, so we:
 #
-#   1. Link the agents into $OPENCODE_CONFIG_DIR/agents/.
+#   1. Materialize expanded agents into $OPENCODE_CONFIG_DIR/agents/.
 #   2. Link the commands into $OPENCODE_CONFIG_DIR/commands/.
 #   3. Materialize a $HOME/.vulpine/skills/ tree pointing at the same upstream
 #      SKILL.md directories that deploy-claude.sh uses — so both platforms read
@@ -23,9 +23,48 @@ fi
 
 mkdir -p "$DEST/agents" "$DEST/commands" "$SKILLS"
 
-echo "[vulpine] Linking OpenCode agents into $DEST/agents/"
+echo "[vulpine] Materializing expanded OpenCode agents into $DEST/agents/"
 for f in "$ROOT"/.opencode/agents/*.md; do
-    ln -sf "$f" "$DEST/agents/$(basename "$f")"
+    out="$DEST/agents/$(basename "$f")"
+    python3 - "$ROOT" "$f" "$out" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+src = pathlib.Path(sys.argv[2])
+dst = pathlib.Path(sys.argv[3])
+
+include_re = re.compile(r"^@(\.claude/agents/[A-Za-z0-9_.-]+\.md)\s*$")
+
+def strip_frontmatter(text: str) -> str:
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                return "\n".join(lines[i + 1:]).lstrip() + "\n"
+    return text
+
+def expand_file(path: pathlib.Path, seen: set[pathlib.Path]) -> str:
+    path = path.resolve()
+    if path in seen:
+        raise SystemExit(f"recursive include while expanding {path}")
+    seen.add(path)
+    out = []
+    for line in path.read_text().splitlines():
+        m = include_re.match(line)
+        if not m:
+            out.append(line)
+            continue
+        inc = (root / m.group(1)).resolve()
+        if not inc.is_file():
+            raise SystemExit(f"missing include {inc} referenced from {path}")
+        out.append(f"<!-- expanded from {m.group(1)} by deploy-opencode.sh -->")
+        out.append(strip_frontmatter(expand_file(inc, seen.copy())).rstrip())
+    return "\n".join(out) + "\n"
+
+dst.write_text(expand_file(src, set()))
+PY
 done
 
 echo "[vulpine] Linking OpenCode commands into $DEST/commands/"

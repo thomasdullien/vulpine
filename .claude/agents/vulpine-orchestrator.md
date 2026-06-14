@@ -44,7 +44,15 @@ python3 -m venv "$VULPINE_RUN/build/venv"
 
 ## Working directory layout
 
-Pick a run root once and reuse it for the whole pipeline:
+Pick a run root once and reuse it for the whole pipeline.
+
+If the caller already supplied `VULPINE_RUN=<absolute-path>` in the prompt or
+environment, that path is authoritative. Export it before dispatching stage 1,
+write every artifact there, and do **not** create or write to
+`~/sources/vulpine/run/` or `$VULPINE_ROOT/run/`.
+
+If no `VULPINE_RUN` was supplied, create a run root under this repository's
+local `run/` directory and export it before dispatching stage 1:
 
 ```
 run/<repo-slug>-<commit-short>/
@@ -57,9 +65,6 @@ run/<repo-slug>-<commit-short>/
 ├── issues/                # stage 7 output (one dir per confirmed issue)
 └── exploit/               # stage 8 output (chains + EXPLOIT_LEARNINGS.md)
 ```
-
-Create the run root and export `VULPINE_RUN=$(realpath run/…)` before
-dispatching stage 1.
 
 ## Output JSON schema
 
