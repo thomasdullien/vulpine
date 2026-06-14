@@ -5,9 +5,9 @@ A multi-agent vulnerability-development pipeline. Feed it a repository URL and
 surface, fuzz each feature, audit every function on the hot path, look for
 security flaws, and attempt to chain the best bugs into an exploit.
 
-Vulpine ships with dual-platform agent definitions so the same pipeline runs on
-**Claude Code** and on **OpenCode**, letting you benchmark different backend
-models (open and closed) on the same vulndev workflow.
+Vulpine ships with multi-platform agent definitions so the same pipeline runs on
+**Claude Code**, **OpenCode**, and **Codex**, letting you benchmark different
+backend models on the same vulndev workflow.
 
 ## Pipeline stages
 
@@ -47,6 +47,10 @@ For OpenCode (which has no native skills concept), the deploy script also
 populates `~/.vulpine/skills/<name>/` so agent prompts can `@`-include the
 same `SKILL.md` content.
 
+For Codex, `scripts/deploy-codex.sh` generates user-scope custom agents under
+`~/.codex/agents/` from the Claude agent prompts and links the same upstream
+skills under `~/.agents/skills/`.
+
 ## Layout
 
 ```
@@ -61,8 +65,9 @@ vulpine/
 ├── scripts/
 │   ├── install-tools.sh             # clone upstream skill repos into ./tools/src/
 │   ├── deploy-claude.sh             # link agents + upstream skills into ~/.claude
-│   └── deploy-opencode.sh           # link agents + commands into ~/.config/opencode,
+│   ├── deploy-opencode.sh           # materialize agents + link commands into ~/.config/opencode,
 │                                    # and materialize ~/.vulpine/skills/ for @-includes
+│   └── deploy-codex.sh              # generate Codex custom agents + link skills
 └── tools/src/                       # populated by install-tools.sh — upstream skill repos
 ```
 
@@ -77,6 +82,9 @@ vulpine/
 
 # 2b. Deploy to OpenCode (user scope).
 ./scripts/deploy-opencode.sh
+
+# 2c. Deploy to Codex (user scope).
+./scripts/deploy-codex.sh
 ```
 
 After deployment:
@@ -84,6 +92,8 @@ After deployment:
 - **Claude Code**: start `claude` in a working directory and run
   `Use vulpine-orchestrator for https://github.com/<org>/<repo> at <commit>`.
 - **OpenCode**: start `opencode` and type `/vulpine <repo-url> [<commit>]`.
+- **Codex**: start `codex` or run `codex exec` and explicitly ask it to spawn
+  the `vulpine-orchestrator` custom agent for `<repo-url> [<commit>]`.
 
 Each run writes its artifacts to `./run/<repo>-<commit>/<stage>/`.
 
@@ -95,6 +105,7 @@ per-platform override flags:
 
 - Claude Code: `claude --model <id>` or `model: inherit` + a parent override.
 - OpenCode: `opencode --model <provider/id>` or set `model` in `opencode.json`.
+- Codex: `codex exec -m <id>` or a profile/config override.
 
 The orchestrator accepts an optional `--model` argument that is propagated to
 every subagent invocation.
