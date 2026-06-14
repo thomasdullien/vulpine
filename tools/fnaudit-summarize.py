@@ -77,7 +77,7 @@ def load_feature_symbols(run: Path, feature: str) -> set[str]:
     path = run / "features" / feature / "functions.txt"
     if not path.is_file():
         sys.exit(f"missing {path}")
-    return {line.strip() for line in path.read_text().splitlines() if line.strip()}
+    return {line.strip().split(" (")[0] if " (" in line else line.strip() for line in path.read_text().splitlines() if line.strip()}
 
 
 def load_audits(db: Path, symbols: set[str]) -> list[dict]:
@@ -90,16 +90,31 @@ def load_audits(db: Path, symbols: set[str]) -> list[dict]:
     # Use a temp table for the symbol set rather than IN (?…?) — symbols can be 500+.
     con.execute("CREATE TEMP TABLE sym(s TEXT PRIMARY KEY)")
     con.executemany("INSERT OR IGNORE INTO sym(s) VALUES (?)", [(s,) for s in symbols])
+    # The fnaudit DB schema keeps verification_status / verification_blocked_by /
+    # testability_notes inside each issue object inside the `issues` JSON array —
+    # they are not separate columns on `audits`. Older versions of this script
+    # selected them as columns, which throws "no such column" against the actual
+    # schema. Pull them out of the issues JSON in render() instead.
     for r in con.execute(
         """
         SELECT a.symbol_qualified, a.file_path, a.line_start, a.intent,
-               a.issues, a.verification_status, a.verification_blocked_by,
-               a.testability_notes, a.source_commit
+               a.issues, a.source_commit
           FROM audits a
           JOIN sym ON sym.s = a.symbol_qualified
         """
     ):
-        rows.append(dict(r))
+        d = dict(r)
+        # Lift first issue's per-issue annotations to the row level so the
+        # downstream render() (which still expects flat keys) keeps working.
+        try:
+            issues = json.loads(d.get("issues") or "[]")
+        except json.JSONDecodeError:
+            issues = []
+        first = issues[0] if issues else {}
+        d["verification_status"] = first.get("verification_status") or ""
+        d["verification_blocked_by"] = first.get("verification_blocked_by") or ""
+        d["testability_notes"] = first.get("testability_notes") or ""
+        rows.append(d)
     con.close()
     return rows
 
